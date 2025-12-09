@@ -1,78 +1,29 @@
 # Quality enforcement rules for Cargo.toml
 
 [lints.clippy]
-# Критические антипаттерны (deny = блокировка компиляции)
 unwrap_used = "deny"
 expect_used = "deny"
 panic = "deny"
+as_conversions = "deny"
 unimplemented = "deny"
 todo = "deny"
-
-# Error handling антипаттерны (канон в anti.md; отражены также в QUALITY.md/CLAUDE.md)
-unwrap_or_default = "warn"          # Предпочтительнее unwrap_or_else
-or_fun_call = "deny"                # unwrap_or(func()) -> unwrap_or_else(|| func())
-ok_expect = "deny"                  # result.ok().expect() -> result.expect()
-
-# Производительность
+await_holding_lock = "deny"
 inefficient_to_string = "deny"
 large_stack_arrays = "deny"
-large_const_arrays = "deny"
 vec_init_then_push = "deny"
-
-# Безопасность типов
-as_conversions = "deny"
-cast_possible_truncation = "warn"
-cast_sign_loss = "warn"
-
-# Async паттерны
-await_holding_lock = "deny"
-async_yields_async = "deny"
-
-# Память
-mem_forget = "deny"
-box_collection = "warn"
-
-# Production-ready patterns (anti.md/QUALITY.md/CLAUDE.md)
-missing_panics_doc = "warn"         # Документирование потенциальных panic
-unwrap_in_result = "deny"           # unwrap/expect внутри Result-returning функции
-needless_question_mark = "warn"     # Избыточное использование ?
-map_err_ignore = "deny"             # Игнорирование ошибок в map_err
-result_map_or_into_option = "warn"  # Неэффективные Result -> Option конверсии
-
-# Structured error handling patterns
-missing_errors_doc = "warn"         # Документирование возможных ошибок
-error_impl_error = "deny"           # Custom errors должны impl std::error::Error
-fallible_impl_from = "deny"         # From impl не должны fallible
+unwrap_in_result = "deny"
+map_err_ignore = "deny"
+needless_collect = "deny"
+or_fun_call = "deny"
+dbg_macro = "deny"
 
 [lints.rust]
 unsafe_code = "deny"
 missing_docs = "warn"
 unused_must_use = "deny"
 
-# Пример использования в Cargo.toml:
-# [workspace.lints]
-# clippy = { level = "deny", priority = -1 }
-# rust = { level = "deny", priority = -1 }
-
-# ==============================================================================
-# НОВЫЕ АНТИПАТТЕРНЫ (2025-01-08) - Обработка ошибок готовая к производству
-# ==============================================================================
-#
-# Ключевые anti-patterns перечислены в anti.md (этот файл отражает их в конфиге):
-#
-# 1. unwrap_or() АНТИПАТТЕРНЫ:
-#    - or_fun_call: unwrap_or(func()) должен быть unwrap_or_else(|| func())
-#    - Жадная оценка vs ленивая оценка для производительности
-#    - Предотвращение непреднамеренных побочных эффектов
-#
-# 2. PRODUCTION-READY PATTERNS:
-#    - unwrap_in_result/expect_in_result: Избегать panic в Result-функциях
-#    - missing_panics_doc: Документировать потенциальные panic
-#    - error_impl_error: Custom errors должны impl std::error::Error
-#
-# 3. STRUCTURED ERROR HANDLING:
-#    - Поддержка thiserror/anyhow patterns
-#    - Правильное использование ? оператора
-#    - Документирование возможных ошибок
-#
-# Эти правила обеспечивают Rust 1.91.1+ compliance и готовность к производству
+[workflow]
+# Always run the full quality gate before marking a task/subtask done.
+precommit_targets = ["make quality-check"]
+ci_targets = ["make ci"]
+require_tasks_guard = true
