@@ -177,7 +177,7 @@ echo "  - .expect() is acceptable in #[cfg(test)] modules"
 echo "  - Production code must use proper error handling"
 
 echo ""
-echo "🦀 Rust 1.89+ specific pattern validation..."
+echo "🦀 Rust 1.91.1+ specific pattern validation..."
 
 # Enhanced anti.md patterns (2025-01-08)
 echo "🔍 Checking enhanced anti.md patterns..."

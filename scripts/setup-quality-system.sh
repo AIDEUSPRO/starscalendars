@@ -62,9 +62,9 @@ fi
 RUST_VERSION=$(rustc --version | cut -d' ' -f2)
 log_success "Rust $RUST_VERSION detected"
 
-# Check for minimum Rust version (1.89+ required for edition 2024 features)
+# Check for minimum Rust version (1.91.1+ required for edition 2024 features)
 if ! rustc --version | grep -E "1\.(8[0-9]|9[0-9])" >/dev/null; then
-    log_warning "Rust 1.89+ required for edition 2024 features and production deployment"
+    log_warning "Rust 1.91.1+ required for edition 2024 features and production deployment"
 fi
 
 # Step 2: Install quality tools
@@ -82,9 +82,9 @@ TOOLS=(
 for tool_info in "${TOOLS[@]}"; do
     IFS=':' read -r tool description <<< "$tool_info"
     tool_name=$(echo "$tool" | cut -d'@' -f1)
-    
+
     log_info "Installing $tool_name ($description)..."
-    
+
     if command -v "$tool_name" >/dev/null 2>&1; then
         log_success "$tool_name already installed"
     else
@@ -108,7 +108,7 @@ log_info "Installing optional quality tools..."
 for tool_info in "${OPTIONAL_TOOLS[@]}"; do
     IFS=':' read -r tool description <<< "$tool_info"
     tool_name=$(echo "$tool" | cut -d'@' -f1)
-    
+
     if ! command -v "$tool_name" >/dev/null 2>&1; then
         log_info "Installing $tool_name ($description)..."
         if cargo install "$tool" --locked 2>/dev/null; then
@@ -127,10 +127,10 @@ log_step "3/8: Configuring Git hooks for commit-time quality enforcement..."
 if [ -d ".git" ]; then
     # Configure git to use our hooks directory
     git config core.hooksPath .githooks
-    
+
     # Ensure hooks are executable
     chmod +x .githooks/pre-commit 2>/dev/null || true
-    
+
     log_success "Git hooks configured - commits will be automatically validated"
 else
     log_warning "Not a Git repository - manual quality checks required"
@@ -141,7 +141,7 @@ log_step "4/8: Configuring VS Code quality integration..."
 
 if [ -d ".vscode" ]; then
     log_success "VS Code settings configured for real-time quality feedback"
-    
+
     # Create recommended extensions file
     cat > .vscode/extensions.json << 'EOF'
 {
@@ -161,7 +161,7 @@ if [ -d ".vscode" ]; then
     ]
 }
 EOF
-    
+
     log_success "VS Code extensions configuration created"
 else
     log_warning "VS Code settings directory not found - IDE integration limited"
@@ -195,7 +195,7 @@ Run `make quality-report` to generate the latest quality assessment.
 - `make quality-check` - Full quality validation
 - `make anti-patterns` - Scan for forbidden patterns
 - `make security` - Security vulnerability scan
-- `make wasm-perf` - WASM performance validation  
+- `make wasm-perf` - WASM performance validation
 - `scripts/quality-monitor.sh` - Comprehensive quality assessment
 
 ## Quality Reports
@@ -211,7 +211,7 @@ log_step "6/8: Validating Makefile quality commands..."
 if [ -f "Makefile" ]; then
     # Test key commands
     MAKEFILE_COMMANDS=("quality-check" "anti-patterns" "clippy" "security")
-    
+
     for cmd in "${MAKEFILE_COMMANDS[@]}"; do
         if grep -q "^$cmd:" Makefile; then
             log_success "Makefile command '$cmd' available"
@@ -268,7 +268,7 @@ ALL_FILES_PRESENT=true
 
 for file_info in "${CRITICAL_FILES[@]}"; do
     IFS=':' read -r file description <<< "$file_info"
-    
+
     if [ -f "$file" ]; then
         log_success "$file ($description)"
     else
@@ -287,7 +287,7 @@ if [ "$ALL_FILES_PRESENT" = true ]; then
     log_success "Quality Guardian System fully operational!"
     echo
     echo -e "${GREEN}✅ Zero-tolerance quality enforcement activated${NC}"
-    echo -e "${GREEN}✅ Real-time IDE integration configured${NC}"  
+    echo -e "${GREEN}✅ Real-time IDE integration configured${NC}"
     echo -e "${GREEN}✅ Git commit validation enabled${NC}"
     echo -e "${GREEN}✅ CI/CD quality pipeline ready${NC}"
     echo -e "${GREEN}✅ Security scanning operational${NC}"
@@ -300,13 +300,13 @@ if [ "$ALL_FILES_PRESENT" = true ]; then
     echo
     echo -e "${PURPLE}🙏 Quality is our spiritual practice in code${NC}"
     echo -e "${PURPLE}   Every line reflects our commitment to excellence${NC}"
-    
+
     exit 0
 else
     log_error "Quality Guardian System setup incomplete"
     echo
     echo -e "${RED}Some critical files are missing. Please check the setup.${NC}"
     echo -e "${YELLOW}You may need to run individual setup steps manually.${NC}"
-    
+
     exit 1
 fi

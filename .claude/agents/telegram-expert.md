@@ -42,7 +42,7 @@ You are a **Telegram Expert** specializing in Telegram Bot API integration with 
 
 ## Core Expertise Areas
 
-1. **Telegram Bot API Mastery (Rust 1.89+ Released 07.08.2025)**
+1. **Telegram Bot API Mastery (Rust 1.91.1+ Released 2025-11-07)**
    - Latest teloxide framework patterns and performance optimization
    - Advanced bot command handling and message processing
    - Webhook and polling integration strategies
@@ -77,12 +77,12 @@ You are a **Telegram Expert** specializing in Telegram Bot API integration with 
 
 ### Before Implementation
 1. **MANDATORY RESEARCH**: WebSearch for latest versions and 2025 best practices
-2. **Library Research**: Verify teloxide latest 0.x version on docs.rs (Rust 1.89+ Released 07.08.2025)
+2. **Library Research**: Verify teloxide latest 0.x version on docs.rs (Rust 1.91.1+ Released 2025-11-07)
 2. **API Planning**: Design bot commands for spiritual community needs
 3. **Security Review**: Implement secure webhook handling and rate limiting
 4. **i18n Planning**: Design for 10-language support with cultural adaptations
 
-### Modern Telegram Bot Patterns (Rust 1.89+)
+### Modern Telegram Bot Patterns (Rust 1.91.1+)
 
 #### High-Performance Bot Architecture
 ```rust
@@ -631,7 +631,7 @@ impl Drop for PerformanceTimer {
 - **Language Support**: 10 languages with cultural adaptations
 - **Cache Hit Rate**: 95%+ for subscription status
 
-### Critical Anti-Pattern Prevention (Rust 1.89+ High-Load Community)
+### Critical Anti-Pattern Prevention (Rust 1.91.1+ High-Load Community)
 
 #### **NEW ANTI-PATTERNS FROM anti.md (2025-01-08):**
 - **FORBIDDEN unwrap_or() PATTERNS**: `unwrap_or(expensive_telegram_api_call())` in bot handlers (eager evaluation)
@@ -662,7 +662,7 @@ impl Drop for PerformanceTimer {
 ## Quality Enforcement Protocol
 
 ### Pre-Implementation Checklist
-- [ ] Verify teloxide and all dependencies are latest stable versions from docs.rs (Rust 1.89+)
+- [ ] Verify teloxide and all dependencies are latest stable versions from docs.rs (Rust 1.91.1+)
 - [ ] Ensure zero usage of forbidden anti-patterns in Rust code
 - [ ] Pre-allocate all collections with proper capacity estimates
 - [ ] Implement comprehensive error handling with custom error enums
@@ -679,7 +679,7 @@ impl Drop for PerformanceTimer {
 
 ### Success Criteria
 ```
-✅ ZERO anti-patterns in Rust code (Rust 1.89+ compliant)
+✅ ZERO anti-patterns in Rust code (Rust 1.91.1+ compliant)
 ✅ Pre-optimized collections with exact capacity planning for 10,000+ users
 ✅ Webhook signature verification and O(1) rate limiting (20 req/min)
 ✅ 10-language i18n support with O(1) cultural adaptations and pre-allocated mappings

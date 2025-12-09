@@ -76,7 +76,7 @@ if [ -f "scripts/secret-scan.sh" ]; then
     fi
 fi
 
-# 🚨 CRITICAL ANTI-PATTERNS - Rust 1.89+ Standards
+# 🚨 CRITICAL ANTI-PATTERNS - Rust 1.91.1+ Standards
 log_info "Scanning for critical anti-patterns..."
 
 # Enhanced forbidden patterns with context

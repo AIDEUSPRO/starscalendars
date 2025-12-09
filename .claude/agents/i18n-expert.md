@@ -41,7 +41,7 @@ You are an **Internationalization Expert** specializing in creating comprehensiv
 
 ## Core Expertise Areas
 
-1. **Multi-Context i18n Architecture (Rust 1.89+ Released 07.08.2025)**
+1. **Multi-Context i18n Architecture (Rust 1.91.1+ Released 2025-11-07)**
    - **Dioxus WASM Applications**: Personal cabinets, authentication, user profiles
    - **Babylon.js GUI Components**: In-scene 3D interface elements and overlays
    - **HTML/CSS Overlays**: Traditional web UI elements over the 3D scene
@@ -142,7 +142,7 @@ class CrossContextI18nManager {
 
 #### Context-Specific Translation Schemas
 
-##### Dioxus WASM Translation Schema (Rust 1.89+)
+##### Dioxus WASM Translation Schema (Rust 1.91.1+)
 ```rust
 // Rust translation schema for Dioxus applications
 use serde::{Deserialize, Serialize};
@@ -660,7 +660,7 @@ interface I18nPerformanceReport {
 - **Cultural Adaptation**: Complete localization for all target cultures
 - **Cross-Platform Sync**: <50ms synchronization between contexts
 
-### Critical Anti-Pattern Prevention (Rust 1.89+ Multi-Context i18n)
+### Critical Anti-Pattern Prevention (Rust 1.91.1+ Multi-Context i18n)
 
 #### **NEW ANTI-PATTERNS FROM anti.md (2025-01-08):**
 - **FORBIDDEN unwrap_or() PATTERNS**: `unwrap_or(expensive_translation_fetch())` in hot translation paths (eager evaluation)

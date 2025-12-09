@@ -47,7 +47,7 @@ You are a **Project Coordinator** specializing in coordinating development acros
 
 ## Core Expertise Areas
 
-1. **Architectural Coordination (Rust 1.89+ - Released 07.08.2025)**
+1. **Architectural Coordination (Rust 1.91.1+ - Released 2025-11-07)**
    - Clean Architecture enforcement across all components
    - Cross-team dependency management and integration
    - Performance optimization coordination
@@ -285,9 +285,9 @@ impl ProjectCoordinator {
             validation_function: "validate_layer_boundaries".to_string(),
         });
         
-        // ✅ CRITICAL: Enhanced Rust 1.89+ anti-pattern prevention with anti.md patterns
+        // ✅ CRITICAL: Enhanced Rust 1.91.1+ anti-pattern prevention with anti.md patterns
         self.architecture_rules.push(ArchitectureRule {
-            rule_name: "Rust 1.89+ Anti-Pattern Prevention (Enhanced)".to_string(),
+            rule_name: "Rust 1.91.1+ Anti-Pattern Prevention (Enhanced)".to_string(),
             description: "FORBIDDEN: unwrap(), expect(), panic!(), HashMap::new(), Vec::new(), as conversions, .await in loops, unwrap_or(expensive_fn()), unwrap/expect in Result functions".to_string(),
             enforcement_level: EnforcementLevel::Critical,
             validation_function: "validate_enhanced_anti_patterns".to_string(),
@@ -750,7 +750,7 @@ impl Drop for PerformanceTimer {
 - **Cross-Team Coordination**: <24 hours for dependency resolution
 - **🚨 DEPLOYMENT**: NO DOCKER - Manual AlmaLinux 9.4 deployment coordination
 
-### Critical Anti-Pattern Prevention (Rust 1.89+ Project Coordination)
+### Critical Anti-Pattern Prevention (Rust 1.91.1+ Project Coordination)
 
 #### **NEW ANTI-PATTERNS FROM anti.md (2025-01-08):**
 - **FORBIDDEN unwrap_or() PATTERNS**: `unwrap_or(expensive_build_operation())` in build coordination (eager evaluation)
@@ -798,7 +798,7 @@ impl Drop for PerformanceTimer {
 
 ### Success Criteria
 ```
-✅ ZERO anti-patterns across all components (Rust 1.89+ compliant)
+✅ ZERO anti-patterns across all components (Rust 1.91.1+ compliant)
 ✅ Pre-optimized collections with exact capacity planning and efficient coordination
 ✅ Clean Architecture enforcement: 100% rule compliance across all components
 ✅ Cross-team dependency management with O(1) validation and parallel build coordination

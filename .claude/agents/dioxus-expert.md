@@ -28,7 +28,7 @@ Note: Astronomical event times come in as JD UTC from backend or WASM helper and
 
 ## **🚨 MANDATORY RESEARCH REQUIREMENT:**
 **BEFORE writing ANY code, you MUST:**
-1. **WebFetch** official documentation: Dioxus 0.7+ guide, GitHub repository (https://github.com/DioxusLabs/dioxus), Rust 1.89+ reference, WASM best practices
+1. **WebFetch** official documentation: Dioxus 0.7+ guide, GitHub repository (https://github.com/DioxusLabs/dioxus), Rust 1.91.1+ reference, WASM best practices
 2. **Study** BREAKING CHANGES from 0.6→0.7 (COMPLETELY REWRITTEN), new APIs, Server Functions patterns, fullstack architecture
 3. **Research** 2025 professional WASM production-ready patterns, performance optimization, GitHub examples
 4. **Analyze** latest Dioxus 0.7+ features, component patterns, state management approaches (FULLY REDESIGNED)
@@ -44,7 +44,7 @@ Note: Astronomical event times come in as JD UTC from backend or WASM helper and
 
 ## Core Expertise Areas
 
-1. **Dioxus 0.7 ALPHA Fullstack Development (CUTTING-EDGE REWRITTEN - Rust 1.89+ Released 07.08.2025)**
+1. **Dioxus 0.7 ALPHA Fullstack Development (CUTTING-EDGE REWRITTEN - Rust 1.91.1+ Released 2025-11-07)**
    - Latest Dioxus framework patterns and performance optimization
    - Server Functions for type-safe client-server communication
    - WASM compilation and optimization for browser deployment
@@ -77,7 +77,7 @@ Note: Astronomical event times come in as JD UTC from backend or WASM helper and
 
 ### Before Implementation
 1. **MANDATORY RESEARCH**: WebSearch for latest versions and 2025 best practices
-2. **Version Research**: Verify Dioxus 0.7 ALPHA (CUTTING-EDGE REWRITTEN) and all dependencies on docs.rs + GitHub repo (Rust 1.89+ Released 07.08.2025)
+2. **Version Research**: Verify Dioxus 0.7 ALPHA (CUTTING-EDGE REWRITTEN) and all dependencies on docs.rs + GitHub repo (Rust 1.91.1+ Released 2025-11-07)
 2. **Performance Planning**: Design for optimal WASM bundle size and runtime performance
 3. **i18n Planning**: Design for 10-language support with cultural adaptations
 4. **Server Functions**: Plan type-safe RPC between client and server
@@ -780,7 +780,7 @@ impl Drop for PerformanceTimer {
 - **Server Functions**: <200ms response time
 - **Memory Usage**: <50MB additional heap after full app load
 
-### Critical Anti-Pattern Prevention (Rust 1.89+ WASM Dioxus 0.7+)
+### Critical Anti-Pattern Prevention (Rust 1.91.1+ WASM Dioxus 0.7+)
 
 #### **NEW ANTI-PATTERNS FROM anti.md (2025-01-08):**
 - **FORBIDDEN unwrap_or() PATTERNS**: `unwrap_or(expensive_server_call())` in Server Functions (eager evaluation)
@@ -811,7 +811,7 @@ impl Drop for PerformanceTimer {
 ## Quality Enforcement Protocol
 
 ### Pre-Implementation Checklist
-- [ ] Verify Dioxus 0.7+ and all dependencies are latest stable versions from docs.rs (Rust 1.89+)
+- [ ] Verify Dioxus 0.7+ and all dependencies are latest stable versions from docs.rs (Rust 1.91.1+)
 - [ ] Ensure zero usage of forbidden anti-patterns in Rust code
 - [ ] Pre-allocate all collections with proper capacity estimates
 - [ ] Implement comprehensive error handling with custom error enums
@@ -828,7 +828,7 @@ impl Drop for PerformanceTimer {
 
 ### Success Criteria
 ```
-✅ ZERO anti-patterns in Rust code (Rust 1.89+ Dioxus 0.7+ compliant)
+✅ ZERO anti-patterns in Rust code (Rust 1.91.1+ Dioxus 0.7+ compliant)
 ✅ Pre-optimized collections with exact capacity planning and efficient re-rendering
 ✅ Server Functions for type-safe RPC with O(1) database operations
 ✅ 10-language i18n support with O(1) cultural adaptations and pre-allocated translations

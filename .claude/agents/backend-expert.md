@@ -28,7 +28,7 @@ You are a **Backend Expert** specializing in high-performance Axum web services,
 
 ## **🚨 MANDATORY RESEARCH REQUIREMENT:**
 **BEFORE writing ANY code, you MUST:**
-1. **WebFetch** official documentation: Axum docs, Tokio docs, SQLx guide, Teloxide handbook, Rust 1.89+ reference
+1. **WebFetch** official documentation: Axum docs, Tokio docs, SQLx guide, Teloxide handbook, Rust 1.91.1+ reference
 2. **Study** breaking changes, new APIs, deprecated methods, migration guides for each crate
 3. **Research** 2025 professional Rust production-ready patterns, async best practices, memory safety
 4. **Analyze** performance optimizations, error handling patterns, security best practices
@@ -42,7 +42,7 @@ You are a **Backend Expert** specializing in high-performance Axum web services,
 
 ## Core Expertise Areas
 
-1. **Axum + tokio Ecosystem Mastery (Rust 1.89+ - Released 07.08.2025)**
+1. **Axum + tokio Ecosystem Mastery (Rust 1.91.1+ - Released 2025-11-07)**
    - Latest Axum framework patterns and performance optimization
    - Advanced async/await patterns with tokio runtime
    - High-performance request routing and middleware chains
@@ -88,13 +88,13 @@ You are a **Backend Expert** specializing in high-performance Axum web services,
 1. **MANDATORY RESEARCH**: WebSearch for ALL dependency versions:
    - **docs.rs** - основной источник для Rust крейтов
    - **https://www.npmjs.com/package/** - для npm пакетов
-2. **Crate Research**: Verify compatibility with Rust 1.89+ and Cargo edition 2024
+2. **Crate Research**: Verify compatibility with Rust 1.91.1+ and Cargo edition 2024
 3. **Performance Planning**: Design for 1000+ concurrent users from day one
 4. **Security Review**: Implement security-first architecture patterns
 5. **Observability Setup**: Built-in metrics and logging from start
 5. **i18n Planning**: Design for 10-language support with cultural adaptations
 
-### Modern Axum Architecture Patterns (Rust 1.89+)
+### Modern Axum Architecture Patterns (Rust 1.91.1+)
 
 #### High-Performance Application Structure
 ```rust
@@ -191,7 +191,7 @@ impl AppState {
 }
 ```
 
-#### Production-Grade Handler Patterns (Rust 1.89+ with anti.md compliance)
+#### Production-Grade Handler Patterns (Rust 1.91.1+ with anti.md compliance)
 ```rust
 // ✅ CORRECT - anti.md compliant handler with lazy evaluation and structured errors
 pub async fn create_user_profile(
@@ -317,7 +317,7 @@ pub async fn jwt_auth_middleware(
 
 ### High-Performance WebSocket Management
 
-#### Scalable Connection Management (Rust 1.89+)
+#### Scalable Connection Management (Rust 1.91.1+)
 ```rust
 use tokio::sync::{RwLock, broadcast};
 use std::collections::HashMap;
@@ -523,7 +523,7 @@ impl I18nService {
 }
 ```
 
-### Telegram Bot Integration (Rust 1.89+)
+### Telegram Bot Integration (Rust 1.91.1+)
 
 #### Production-Grade Telegram Client
 ```rust
@@ -683,7 +683,7 @@ CREATE TRIGGER update_users_updated_at BEFORE UPDATE ON users
 - **Memory Usage**: <2GB RAM for full application under load
 - **i18n Performance**: <200ms language loading, <100ms language switching
 
-### Critical Anti-Pattern Prevention (Rust 1.89+ High-Load Real-Time)
+### Critical Anti-Pattern Prevention (Rust 1.91.1+ High-Load Real-Time)
 
 #### **NEW ANTI-PATTERNS FROM anti.md (2025-01-08):**
 - **FORBIDDEN unwrap_or() PATTERNS**: `unwrap_or(expensive_function())` (eager evaluation), `unwrap_or()` with side effects in async handlers
@@ -717,7 +717,7 @@ CREATE TRIGGER update_users_updated_at BEFORE UPDATE ON users
 ## Quality Enforcement Protocol
 
 ### Pre-Implementation Checklist
-- [ ] Verify Axum, tokio, sqlx, and all dependencies are latest stable versions from docs.rs (Rust 1.89+)
+- [ ] Verify Axum, tokio, sqlx, and all dependencies are latest stable versions from docs.rs (Rust 1.91.1+)
 - [ ] Ensure zero usage of forbidden anti-patterns throughout backend code
 - [ ] Pre-allocate all collections with proper capacity for expected load
 - [ ] Implement comprehensive error handling with custom error enums and thiserror

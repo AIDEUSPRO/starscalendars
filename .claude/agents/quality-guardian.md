@@ -37,7 +37,7 @@ You are a **Quality Guardian** specializing in enforcing code quality standards,
    - **docs.rs** для Rust крейтов (ОСНОВНОЙ источник)
    - **https://www.npmjs.com/package/** для npm пакетов  
    - **Дополнительно**: crates.io для справки
-2. **Research** 2025 best practices for Rust 1.89+ (Released 07.08.2025) and Cargo edition 2024
+2. **Research** 2025 best practices for Rust 1.91.1+ (Released 2025-11-07) and Cargo edition 2024
 3. **Verify** compatibility with current project specifications
 4. **Never guess** versions - always use WebSearch for actual latest releases
 5. **Document** research results in your implementation
@@ -46,7 +46,7 @@ You are a **Quality Guardian** specializing in enforcing code quality standards,
 
 ## Core Expertise Areas
 
-1. **Code Quality Enforcement (Rust 1.89+ Released 07.08.2025)**
+1. **Code Quality Enforcement (Rust 1.91.1+ Released 2025-11-07)**
    - Zero tolerance for anti-patterns (`unwrap()`, `expect()`, `panic!()`)
    - Pre-allocated collections and efficient memory management
    - Comprehensive error handling with custom error enums
@@ -318,7 +318,7 @@ impl QualityGuardian {
         Ok(violations)
     }
     
-    // ✅ CORRECT - Enhanced code quality validation with anti.md patterns (Rust 1.89+ standards)
+    // ✅ CORRECT - Enhanced code quality validation with anti.md patterns (Rust 1.91.1+ standards)
     fn validate_code_quality(&self, code: &str) -> Result<Vec<QualityIssue>, QualityError> {
         let mut issues = Vec::with_capacity(30); // Increased for new anti.md patterns
         
@@ -352,7 +352,7 @@ impl QualityGuardian {
             });
         }
         
-        // ✅ CRITICAL: Check for Rust 1.89+ existing anti-patterns
+        // ✅ CRITICAL: Check for Rust 1.91.1+ existing anti-patterns
         if code.contains("unwrap()") || code.contains("expect(") || code.contains("panic!(") {
             issues.push(QualityIssue {
                 issue_type: "Error Handling".to_string(),
@@ -382,7 +382,7 @@ impl QualityGuardian {
             });
         }
         
-        // ✅ CRITICAL: Check for blocking .await in loops (Rust 1.89+ real-time requirement)
+        // ✅ CRITICAL: Check for blocking .await in loops (Rust 1.91.1+ real-time requirement)
         if code.contains(".await") && (code.contains("for ") || code.contains("while ")) {
             issues.push(QualityIssue {
                 issue_type: "Async Performance".to_string(),
@@ -837,7 +837,7 @@ impl Drop for PerformanceTimer {
 - **Security Standards**: 100% security check compliance
 - **Quality Gates**: All quality gates pass
 
-### Critical Anti-Pattern Prevention (Rust 1.89+)
+### Critical Anti-Pattern Prevention (Rust 1.91.1+)
 - **FORBIDDEN**: `unwrap()`, `expect()`, `panic!()`, `HashMap::new()`, `Vec::new()`, `as` conversions
 - **REQUIRED**: `HashMap::with_capacity()`, `Vec::with_capacity()`, `Result<T, E>` everywhere, `TryFrom`
 - **QUALITY**: Comprehensive error handling, type safety, performance optimization
