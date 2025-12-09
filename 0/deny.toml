@@ -1,0 +1,48 @@
+# cargo-deny configuration for AI+KO Service
+
+[graph]
+all-features = true
+no-default-features = false
+
+[output]
+feature-depth = 1
+
+[advisories]
+version = 2
+db-urls = ["https://github.com/rustsec/advisory-db"]
+ignore = [
+  { id = "RUSTSEC-2023-0071", reason = "Transitive via sqlx-mysql; mysql features disabled (postgres-only). Not reachable at runtime." },
+  { id = "RUSTSEC-2024-0436", reason = "rmcp transitively depends on paste; no safe upgrade yet; accepted temporarily until rmcp updates. No direct usage in our code." },
+]
+
+[licenses]
+version = 2
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Unicode-DFS-2016",
+  "MPL-2.0",
+  "Zlib",
+  "Unlicense",
+  "Unicode-3.0",
+  "CDLA-Permissive-2.0",
+  "OpenSSL",
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "allow"
+
+deny = [
+  { name = "openssl", version = "*" },
+  { name = "native-tls", version = "*" },
+  { name = "hyper-tls", version = "*" }
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

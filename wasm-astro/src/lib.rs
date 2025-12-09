@@ -216,15 +216,17 @@ pub fn init() {
 // Legacy compute_all API removed. Use compute_state(julian_day).
 
 /// Compute main state in a single call (future-extensible):
-/// Layout [11 f64]:
+/// Layout [14 f64]:
 /// - Sun(0..2): zeros by design (Sun fixed at scene origin; skip per-frame solar math)
 /// - Moon(3..5): geocentric ecliptic Cartesian (x,y,z) in AU
 /// - Earth(6..8): heliocentric ecliptic Cartesian (x,y,z) in AU
 /// - Zenith(9..10): Solar zenith [lon_east_rad, lat_rad]
+/// - Earth RA/Dec(11..12): heliocentric equatorial coordinates (radians)
+/// - Earth distance(13): heliocentric radius vector (AU)
 #[wasm_bindgen]
 pub fn compute_state(julian_day: f64) -> *const f64 {
     thread_local! {
-        static STATE_BUFFER: RefCell<[f64; 11]> = const { RefCell::new([0.0; 11]) };
+        static STATE_BUFFER: RefCell<[f64; 14]> = const { RefCell::new([0.0; 14]) };
     }
 
     STATE_BUFFER.with(|buffer| {
@@ -240,7 +242,9 @@ pub fn compute_state(julian_day: f64) -> *const f64 {
         };
 
         // Nutation for precision
-        let (nut_long, _nut_oblq) = astro::nutation::nutation(jd);
+        let (nut_long, nut_oblq) = astro::nutation::nutation(jd);
+        let mean_oblq = astro::ecliptic::mn_oblq_IAU(jd);
+        let true_oblq = mean_oblq + nut_oblq;
 
         // Sun position/derived values are not used in hot path; keep zeros to minimize per-frame work
         out[0] = 0.0; // reserved
@@ -263,6 +267,11 @@ pub fn compute_state(julian_day: f64) -> *const f64 {
         out[6] = earth_pos.x;
         out[7] = earth_pos.y;
         out[8] = earth_pos.z;
+        let earth_ra = astro::coords::asc_frm_ecl(earth_long, earth_lat, true_oblq);
+        let earth_dec = astro::coords::dec_frm_ecl(earth_long, earth_lat, true_oblq);
+        out[11] = astro::angle::limit_to_two_PI(earth_ra);
+        out[12] = earth_dec;
+        out[13] = earth_r;
 
         // Solar zenith in radians (lon E+, lat N+)
         let (zenith_lon_east_rad, zenith_lat_rad) = solar_zenith_position_rad_internal(jd);
@@ -305,7 +314,7 @@ pub fn next_winter_solstice_from(jd_utc_start: f64) -> f64 {
         // Geometric geocentric ecliptic coords (mean equinox of date)
         let (sun_ecl, sun_dist_au) = astro::sun::geocent_ecl_pos(jd_tt);
         // FK5 correction
-        let (long_fk5, lat_fk5) = astro::sun::ecl_coords_to_FK5(jd_tt, sun_ecl.long, sun_ecl.lat);
+        let (long_fk5, _lat_fk5) = astro::sun::ecl_coords_to_FK5(jd_tt, sun_ecl.long, sun_ecl.lat);
         // Annual aberration (radians)
         let ab_long = astro::aberr::sol_aberr(sun_dist_au);
         // Nutation in longitude
@@ -362,6 +371,88 @@ pub fn next_winter_solstice_from(jd_utc_start: f64) -> f64 {
 
     // Convert TT -> UTC using ΔT at event date
     tt_to_utc_jd(jd_tt_min)
+}
+/// Compute Earth's perihelion and aphelion for a given UTC year (approximate, numeric on VSOP87 r(jd)).
+/// Returns pointer to [peri_jd_utc, peri_r_au, peri_long_rad, aph_jd_utc, aph_r_au, aph_long_rad]
+/// Heavy: run off-frame only.
+#[wasm_bindgen]
+pub fn earth_perihelion_aphelion_for_year_utc(year_utc: i32) -> *const f64 {
+    thread_local! { static EA_BUF: RefCell<[f64; 6]> = const { RefCell::new([f64::NAN; 6]) }; }
+
+    EA_BUF.with(|buffer| {
+        let mut out = buffer.borrow_mut();
+        if year_utc < 1600 || year_utc > 2600 {
+            return std::ptr::null();
+        }
+
+        // Create Date struct for January 1, year_utc, 00:00:00 UTC
+        let date = astro::time::Date {
+            year: year_utc as i16,
+            month: 1,
+            decimal_day: 1.0,
+            cal_type: astro::time::CalType::Gregorian,
+        };
+        let jd_start = astro::time::julian_day(&date);
+
+        // Helper: heliocentric Earth distance r(jd) and longitude lambda(jd)
+        #[inline]
+        fn earth_r_lambda(jd: f64) -> (f64, f64) {
+            let (l, _b, r) = astro::planet::heliocent_coords(&astro::planet::Planet::Earth, jd);
+            (r, astro::angle::limit_to_two_PI(l))
+        }
+
+        // Numeric helper: find extremum in [a,b] by sampling + parabolic fit around best sample
+        #[inline]
+        fn extremum_in_range(a: f64, b: f64, want_min: bool) -> (f64, f64, f64) {
+            let n = 366usize; // daily
+            let mut best_jd = a;
+            let mut best_r = if want_min {
+                f64::INFINITY
+            } else {
+                -f64::INFINITY
+            };
+            for i in 0..=n {
+                let jd = a + (b - a) * (i as f64) / (n as f64);
+                let (r, _l) = earth_r_lambda(jd);
+                if (want_min && r < best_r) || (!want_min && r > best_r) {
+                    best_r = r;
+                    best_jd = jd;
+                }
+            }
+            // Refine around best with small parabola fit using ±H
+            let h = 0.5; // days @allow-numeric-param
+            let (r_m, _l_m) = earth_r_lambda(best_jd - h);
+            let (r_0, _l_0) = earth_r_lambda(best_jd);
+            let (r_p, _l_p) = earth_r_lambda(best_jd + h);
+            // Parabolic vertex t* = best_jd + h*(r_m - r_p)/(2*(r_m - 2*r_0 + r_p))
+            let denom = (r_m - 2.0 * r_0 + r_p) * 2.0;
+            let jd_star = if denom.abs() > 1e-12 {
+                best_jd + h * (r_m - r_p) / denom
+            } else {
+                best_jd
+            };
+            let (r_star, l_star) = earth_r_lambda(jd_star);
+            (jd_star, r_star, l_star)
+        }
+
+        // Perihelion near early January; Aphelion near early July
+        let (peri_jd_tt, peri_r, peri_l) =
+            extremum_in_range(jd_start - 10.0, jd_start + 50.0, true);
+        let (aph_jd_tt, aph_r, aph_l) =
+            extremum_in_range(jd_start + 170.0, jd_start + 220.0, false);
+
+        // Convert TT→UTC (same approx used elsewhere)
+        let peri_jd_utc = timescales::tt_to_utc_jd(peri_jd_tt);
+        let aph_jd_utc = timescales::tt_to_utc_jd(aph_jd_tt);
+
+        out[0] = peri_jd_utc;
+        out[1] = peri_r;
+        out[2] = peri_l;
+        out[3] = aph_jd_utc;
+        out[4] = aph_r;
+        out[5] = aph_l;
+        out.as_ptr()
+    })
 }
 
 // Removed legacy helpers get_body_count/get_coordinate_count (no longer used by frontend)

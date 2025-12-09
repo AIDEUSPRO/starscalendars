@@ -293,7 +293,7 @@ Frontend (frontend/, Vite + TS + Babylon.js)
 
 TS строгий (noImplicitAny, strictNullChecks).
 Импорт WASM как ESM. Использовать vite-plugin-wasm/top-level-await.
-Рендер‑цикл: один вызов compute_state(jd), чтение Float64Array(memory.buffer, ptr, 11), без аллокаций.
+Рендер‑цикл: один вызов compute_state(jd), чтение Float64Array(memory.buffer, ptr, 14) и переиспользование view без аллокаций.
 Babylon.js: переиспользование объектов; freeze для статичных.
 Пример TS:
 import { Engine, Scene, ArcRotateCamera, HemisphericLight, MeshBuilder, Vector3 } from "@babylonjs/core";

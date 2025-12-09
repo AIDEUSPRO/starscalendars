@@ -55,6 +55,7 @@ export interface WASMModule {
   readonly get_apparent_sidereal_time: (julianDay: number) => number;
   // NT (Quantum Time)
   readonly get_quantum_time_components: (epochMs: number, timezoneOffsetMinutes: number) => number;
+  readonly earth_perihelion_aphelion_for_year_utc?: (yearUtc: number) => number; // ptr to 6 f64
   // Optional: timescale overrides for leap seconds (forward-compatible)
   readonly set_tai_minus_utc_override?: (seconds: number) => void;
   readonly clear_tai_minus_utc_override?: () => void;
@@ -114,6 +115,7 @@ export const initializeWASM = async (): Promise<WASMModule> => {
       const get_quantum_time_components_raw = (wrapper as unknown as { get_quantum_time_components?: (ms: number, tzmin: number) => number }).get_quantum_time_components;
       const set_tai_minus_utc_override_raw = (wrapper as unknown as { set_tai_minus_utc_override?: (s: number) => void }).set_tai_minus_utc_override;
       const clear_tai_minus_utc_override_raw = (wrapper as unknown as { clear_tai_minus_utc_override?: () => void }).clear_tai_minus_utc_override;
+      const earth_perihelion_aphelion_for_year_utc_raw = (wrapper as unknown as { earth_perihelion_aphelion_for_year_utc?: (y: number) => number }).earth_perihelion_aphelion_for_year_utc;
       const memory = wasmNs.memory;
 
       if (!memory) throw new Error('WASM memory export missing');
@@ -171,6 +173,9 @@ export const initializeWASM = async (): Promise<WASMModule> => {
       }
       if (typeof clear_tai_minus_utc_override_raw === 'function') {
         (module as any).clear_tai_minus_utc_override = () => clear_tai_minus_utc_override_raw();
+      }
+      if (typeof earth_perihelion_aphelion_for_year_utc_raw === 'function') {
+        (module as any).earth_perihelion_aphelion_for_year_utc = (y: number) => earth_perihelion_aphelion_for_year_utc_raw(y);
       }
 
       globalWasmModule = module;

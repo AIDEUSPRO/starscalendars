@@ -31,32 +31,33 @@ error-handling-patterns:
 	@echo "✅ Error handling patterns validated"
 
 # 🦀 Строгий Clippy с правилами из anti.md/QUALITY.md/CLAUDE.md
+# ✅ ИСКЛЮЧАЕМ astro-rust из проверок - это сторонняя библиотека (read-only)
 clippy:
 	@echo "🦀 Running strict Clippy checks (excluding astro-rust dependency)..."
-	@echo "📦 Checking WASM module..."
+	@echo "📦 Checking WASM module (only our wrapper code)..."
 	@if [ -f "wasm-astro/Cargo.toml" ]; then \
-		cargo clippy --manifest-path=wasm-astro/Cargo.toml --target wasm32-unknown-unknown --all-targets --all-features -- \
+		cargo clippy --manifest-path=wasm-astro/Cargo.toml --target wasm32-unknown-unknown --all-targets --all-features --no-deps -- \
 			-W clippy::unwrap_used -W clippy::expect_used -W clippy::panic || echo "⚠️ WASM clippy issues found"; \
 	else \
 		echo "⚠️ WASM module not found at wasm-astro/"; \
 	fi
 	@echo "📦 Checking workspace packages..."
 	@if [ -f "backend/Cargo.toml" ]; then \
-		cargo clippy --manifest-path=backend/Cargo.toml --all-targets --all-features -- \
+		cargo clippy --manifest-path=backend/Cargo.toml --all-targets --all-features --no-deps -- \
 			-D clippy::unwrap_used -D clippy::expect_used -D clippy::panic -D clippy::as_conversions || echo "⚠️ Backend clippy issues found"; \
 	fi
 	@if [ -d "libs" ]; then \
 		find libs -name "Cargo.toml" | while read cargo_file; do \
 			echo "📦 Checking $$cargo_file..."; \
-			cargo clippy --manifest-path="$$cargo_file" --all-targets --all-features -- \
+			cargo clippy --manifest-path="$$cargo_file" --all-targets --all-features --no-deps -- \
 				-D clippy::unwrap_used -D clippy::expect_used -D clippy::panic -D clippy::as_conversions || echo "⚠️ Clippy issues in $$cargo_file"; \
 		done; \
 	fi
 	@if [ -f "dioxus-app/Cargo.toml" ]; then \
-		cargo clippy --manifest-path=dioxus-app/Cargo.toml --all-targets --all-features -- \
+		cargo clippy --manifest-path=dioxus-app/Cargo.toml --all-targets --all-features --no-deps -- \
 			-D clippy::unwrap_used -D clippy::expect_used -D clippy::panic -D clippy::as_conversions || echo "⚠️ Dioxus clippy issues found"; \
 	fi
-	@echo "✅ Clippy checks completed for existing packages"
+	@echo "✅ Clippy checks completed for our packages only (astro-rust excluded)"
 
 # 🎯 WASM производительность и безопасность (enhanced for 2025)
 wasm-perf:

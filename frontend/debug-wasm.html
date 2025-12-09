@@ -304,15 +304,18 @@
                 totalTime += calcTime;
 
                 if (ptr !== 0) {
-                    const state = new Float64Array(wasmModule.memory.buffer, ptr, 11);
+                    const state = new Float64Array(wasmModule.memory.buffer, ptr, 14);
                     const earthPos = [state[6], state[7], state[8]];
-                    const earthDist = Math.sqrt(earthPos[0] ** 2 + earthPos[1] ** 2 + earthPos[2] ** 2);
+                    const earthDist = state[13];
+                    const earthRa = state[11];
+                    const earthDec = state[12];
 
                     dataDiv.innerHTML = `
                         <div class="success">✅ Frame ${frameCount} - Calculation: ${calcTime.toFixed(3)}ms</div>
                         <div class="info">📊 Average time: ${(totalTime / frameCount).toFixed(3)}ms</div>
                         <div class="info">🌍 Earth position: [${earthPos.map(v => v.toFixed(6)).join(', ')}]</div>
                         <div class="info">📏 Earth distance: ${earthDist.toFixed(6)} AU</div>
+                        <div class="info">🌀 Earth RA/Dec: [${earthRa.toFixed(6)}, ${earthDec.toFixed(6)}] rad</div>
                         <div class="info">📅 Julian Day: ${jd.toFixed(6)}</div>
                     `;
                 } else {

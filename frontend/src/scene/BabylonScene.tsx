@@ -74,6 +74,19 @@ const MEAN_LUNAR_DISTANCE_AU = 0.00257;
 // Scale factor so that mean lunar distance maps to ~200 units; preserves ellipse shape
 const MOON_UNITS_PER_AU = MOON_ORBIT_RADIUS_UNITS / MEAN_LUNAR_DISTANCE_AU;
 
+const computeScenePositionFromRaDec = (
+  rightAscensionRad: number,
+  declinationRad: number,
+  radiusUnits: number,
+  out: Vector3,
+  scratchBase: Vector3,
+  scratchMatrix: Matrix
+): void => {
+  scratchBase.set(0, 0, radiusUnits);
+  Matrix.RotationYawPitchRollToRef(-rightAscensionRad, -declinationRad, 0, scratchMatrix);
+  Vector3.TransformCoordinatesToRef(scratchBase, scratchMatrix, out);
+};
+
 // ✅ КРИТИЧЕСКИЙ БЛОК 1: STAR DATA МАССИВ из референсной сцены (строки 710-739)
 // Точные астрономические данные звезд для созвездий
 const STAR_DATA = {
@@ -156,6 +169,9 @@ interface SceneState {
   cloudsShaderMaterial?: ShaderMaterial | null;
   zenithMarker?: Mesh | null;
   lunarZenithMarker?: Mesh | null;
+  earthOrbit?: Mesh | null;
+  aphelionMarker?: Mesh | null;
+  perihelionMarker?: Mesh | null;
   earthPivot?: TransformNode | null;
   moonPivot?: TransformNode | null;
   zenithRay?: Mesh | null;
@@ -916,6 +932,9 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
       cloudsShaderMaterial: cloudsMaterial,
       zenithMarker,
       lunarZenithMarker,
+      earthOrbit: null,
+      aphelionMarker: null,
+      perihelionMarker: null,
       earthPivot,
       moonPivot,
       zenithRay,
@@ -1006,19 +1025,20 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
         }
       }
 
-      // Debug: log sublunar coordinates once per minute to cross-check with external sources
-      // if (sceneStateRef.current.lastSolsticeMinute === currentMinute && wasmModule) {
-      //   const jdNow = JULIAN_DAY_UNIX_EPOCH + nowEpochMs / 86400000.0;
-      //   const sub = computeSublunarLatLonDeg(jdNow, wasmModule);
-      //   if (sub) {
-      //     console.log(`🌙 Sublunar (deg): lat=${sub.latDeg.toFixed(3)} lonE=${sub.lonDegEast.toFixed(3)} (E+; W−)`);
-      //     // Also log from marker local vector to verify mapping chain
-      //     const sceneState = sceneStateRef.current;
-      //     if (sceneState.lunarZenithMarker) {
-      //       const local = sceneState.lunarZenithMarker.position;
-      //       const subLocal = localVecToLatLonDeg(local);
-      //       console.log(`🟢 MarkerLocal→LatLon: lat=${subLocal.latDeg.toFixed(3)} lonE=${subLocal.lonDegEast.toFixed(3)}`);
-      //     }
+      // Dev diagnostic: once per minute log angles Earth vs perihelion/aphelion markers
+      // if (sceneStateRef.current.lastSolsticeMinute === currentMinute) {
+      //   const st = sceneStateRef.current;
+      //   if (st.earthPivot && st.perihelionMarker && st.aphelionMarker) {
+      //     const e = st.earthPivot.position;
+      //     const p = st.perihelionMarker.position;
+      //     const a = st.aphelionMarker.position;
+      //     const ang = (v1: Vector3, v2: Vector3) => {
+      //       const d = (Vector3.Dot(v1, v2)) / (v1.length() * v2.length());
+      //       return Math.acos(Math.max(-1, Math.min(1, d))) * 180 / Math.PI;
+      //     };
+      //     try {
+      //       console.log(`🧭 Earth→peri angle: ${ang(e, p).toFixed(2)}°, Earth→aph angle: ${ang(e, a).toFixed(2)}°`);
+      //     } catch { }
       //   }
       // }
 
@@ -1040,6 +1060,7 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
   // ✅ CORRECT - Pre-allocated Vector3 objects for zero-allocation updates
   const moonPositionVector = useMemo(() => Vector3.Zero(), []);
   const earthPositionVector = useMemo(() => Vector3.Zero(), []);
+  const raDecBaseVector = useMemo(() => Vector3.Zero(), []);
   const zenithLocalVector = useMemo(() => Vector3.Zero(), []);
   const targetDirVector = useMemo(() => Vector3.Zero(), []);
   const crossAxisVector = useMemo(() => Vector3.Zero(), []);
@@ -1105,20 +1126,14 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
       }
       const positionsPtr = wasmModule.compute_state(julianDay);
 
-      // Add debug logging for first few frames
-      if (!((window as any).__debugCallCount)) (window as any).__debugCallCount = 0;
-      if ((window as any).__debugCallCount++ < 5) {
-        console.log(`🌌 WASM Frame ${(window as any).__debugCallCount}: JD=${julianDay.toFixed(6)}, ptr=${positionsPtr}`);
-      }
-
       if (positionsPtr === 0) {
         console.warn('⚠️ WASM calculation returned null pointer');
         return;
       }
 
-      // ✅ Zero-copy access via Float64Array view to WASM memory (STATE: 11 f64)
+      // ✅ Zero-copy access via Float64Array view to WASM memory (STATE: 14 f64)
       const mem = wasmModule.memory.buffer;
-      if (positionsPtr < 0 || positionsPtr + (11 * 8) > mem.byteLength) {
+      if (positionsPtr < 0 || positionsPtr + (14 * 8) > mem.byteLength) {
         console.error('❌ STATE pointer out of bounds');
         return;
       }
@@ -1126,7 +1141,7 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
       if (stateViewRef.current === null ||
         statePtrRef.current !== positionsPtr ||
         memBufferRef.current !== mem) {
-        stateViewRef.current = new Float64Array(mem, positionsPtr, 11);
+        stateViewRef.current = new Float64Array(mem, positionsPtr, 14);
         statePtrRef.current = positionsPtr;
         memBufferRef.current = mem;
       }
@@ -1134,6 +1149,9 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
       // Buffer layout: Sun(0..2) geocentric, Moon(3..5) geocentric, Earth(6..8) heliocentric, Zenith(9..10)
       const ex = buf[6]!, ey = buf[7]!, ez = buf[8]!;
       const mx = buf[3]!, my = buf[4]!, mz = buf[5]!;
+      const earthRaRad = buf[11]!;
+      const earthDecRad = buf[12]!;
+      const earthDistanceAu = buf[13]!;
       const sx = 0.0, sy = 0.0, sz = 0.0; // Sun at center in scene
 
       // Zenith from state buffer (radians)
@@ -1144,9 +1162,9 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
 
       const astronomicalData = {
         sun: { x: sx, y: sy, z: sz, distance: 0, timestamp: currentTimeMs },
-        earth: { x: ex, y: ey, z: ez, distance: Math.hypot(ex, ey, ez), timestamp: currentTimeMs },
+        earth: { ra: earthRaRad, dec: earthDecRad, distance: earthDistanceAu, timestamp: currentTimeMs },
         moon: { x: ex + mx, y: ey + my, z: ez + mz, distance: Math.hypot(mx, my, mz), timestamp: currentTimeMs },
-        earthSunDistance: Math.hypot(ex, ey, ez),
+        earthSunDistance: earthDistanceAu,
         sunZenithLat, sunZenithLng, sunZenithLatRad, sunZenithLngRad,
       } as const;
 
@@ -1161,12 +1179,23 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
       // ✅ Update Earth pivot world position and Earth-local zenith marker
       if (sceneState.earthPivot) {
         // Axis mapping aligned to ecliptic tilt visually: X->X, Z(ecliptic)->Y(scene), Y(ecliptic)->Z(scene) with single Z flip
-        earthPositionVector.set(
-          astronomicalData.earth.x * scaleAU,
-          astronomicalData.earth.z * scaleAU,
-          -(astronomicalData.earth.y * scaleAU)
+        computeScenePositionFromRaDec(
+          earthRaRad,
+          earthDecRad,
+          earthDistanceAu * scaleAU,
+          earthPositionVector,
+          raDecBaseVector,
+          rotMatrix
         );
         sceneState.earthPivot.position.copyFrom(earthPositionVector);
+
+        if (!((window as any).__debugCallCount)) (window as any).__debugCallCount = 0;
+        if ((window as any).__debugCallCount++ < 5) {
+          console.log(
+            `🌌 WASM Frame ${(window as any).__debugCallCount}: JD=${julianDay.toFixed(6)}, RA=${earthRaRad.toFixed(6)} rad, Dec=${earthDecRad.toFixed(6)} rad, dist=${earthDistanceAu.toFixed(6)} AU`,
+            { ptr: positionsPtr, equatorialScene: { x: earthPositionVector.x, y: earthPositionVector.y, z: earthPositionVector.z } }
+          );
+        }
 
         // ✅ CAMERA ALWAYS FOLLOWS EARTH - as requested!
         if (sceneState.camera) {
@@ -1451,6 +1480,128 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
       }
     };
   }, [initializeBabylonScene]);
+
+  // Build Earth's heliocentric orbit line (once) using daily samples for current UTC year
+  useEffect(() => {
+    const sceneState = sceneStateRef.current;
+    if (!wasmModule || !sceneState.scene || sceneState.earthOrbit) return;
+
+    try {
+      // Prepare daily JDs for current year UTC
+      const now = new Date();
+      const year = now.getUTCFullYear();
+      const startMs = Date.UTC(year, 0, 1, 0, 0, 0, 0);
+      const jd0 = JULIAN_DAY_UNIX_EPOCH + startMs / 86400000.0;
+
+      const points: Vector3[] = [];
+      const scaleAU = 700.0; // must match realtime mapping scale
+
+      let minR = Number.POSITIVE_INFINITY;
+      let maxR = 0;
+      let perihelionPos: Vector3 | null = null;
+      let aphelionPos: Vector3 | null = null;
+
+      const scratchBase = new Vector3(0, 0, 0);
+      const scratchMatrix = new Matrix();
+      const scratchOut = new Vector3(0, 0, 0);
+      const scenePointFromRaDec = (ra: number, dec: number, distAu: number, target?: Vector3): Vector3 => {
+        const output = target ?? scratchOut;
+        computeScenePositionFromRaDec(ra, dec, distAu * scaleAU, output, scratchBase, scratchMatrix);
+        return target ? output : output.clone();
+      };
+
+      for (let i = 0; i <= 365; i++) {
+        const jd = jd0 + i;
+        const ptr = wasmModule.compute_state(jd);
+        if (!ptr) continue;
+        const view = new Float64Array(wasmModule.memory.buffer, ptr, 14);
+        const r = view[13]!;
+        const ra = view[11]!;
+        const dec = view[12]!;
+        const p = scenePointFromRaDec(ra, dec, r);
+        points.push(p);
+        if (r < minR) { minR = r; perihelionPos = p.clone(); }
+        if (r > maxR) { maxR = r; aphelionPos = p.clone(); }
+      }
+
+      // Close the loop visually
+      if (points.length > 2) points.push(points[0]!.clone());
+
+      const orbit = MeshBuilder.CreateLines('earthOrbit', { points }, sceneState.scene);
+      orbit.color = new Color3(1, 1, 0); // yellow
+      orbit.alphaIndex = 5;
+      orbit.isPickable = false;
+      orbit.freezeWorldMatrix();
+      sceneStateRef.current.earthOrbit = orbit;
+
+      // Create/apdate perihelion (green) and aphelion (red) markers of diameter 5
+      if (perihelionPos) {
+        const m = MeshBuilder.CreateSphere('perihelionMarker', { diameter: 5, segments: 8 }, sceneState.scene);
+        const mat = new StandardMaterial('perihelionMat', sceneState.scene);
+        mat.diffuseColor = new Color3(0, 1, 0);
+        mat.emissiveColor = new Color3(0, 0.6, 0);
+        mat.specularColor = new Color3(0, 0, 0);
+        m.material = mat;
+        m.position.copyFrom(perihelionPos);
+        m.isPickable = false;
+        m.freezeWorldMatrix();
+        sceneStateRef.current.perihelionMarker = m;
+      }
+      if (aphelionPos) {
+        const m = MeshBuilder.CreateSphere('aphelionMarker', { diameter: 5, segments: 8 }, sceneState.scene);
+        const mat = new StandardMaterial('aphelionMat', sceneState.scene);
+        mat.diffuseColor = new Color3(1, 0, 0);
+        mat.emissiveColor = new Color3(0.7, 0, 0);
+        mat.specularColor = new Color3(0, 0, 0);
+        m.material = mat;
+        m.position.copyFrom(aphelionPos);
+        m.isPickable = false;
+        m.freezeWorldMatrix();
+        sceneStateRef.current.aphelionMarker = m;
+      }
+
+      // Prefer precise perihelion/aphelion from WASM helper if available (overrides sampled markers)
+      if (typeof wasmModule.earth_perihelion_aphelion_for_year_utc === 'function') {
+        try {
+          const ptr = wasmModule.earth_perihelion_aphelion_for_year_utc(year);
+          if (ptr) {
+            const arr = new Float64Array(wasmModule.memory.buffer, ptr, 6);
+            const periJdUtc = arr[0]!;
+            const aphJdUtc = arr[3]!;
+
+            const earthPosFromState = (jdUtc: number, out: Vector3): boolean => {
+              const p2 = wasmModule.compute_state(jdUtc);
+              if (!p2) return false;
+              const v2 = new Float64Array(wasmModule.memory.buffer, p2, 14);
+              const ra2 = v2[11]!;
+              const dec2 = v2[12]!;
+              const dist2 = v2[13]!;
+              computeScenePositionFromRaDec(ra2, dec2, dist2 * scaleAU, out, scratchBase, scratchMatrix);
+              return true;
+            };
+
+            const periPosVec = new Vector3();
+            const aphPosVec = new Vector3();
+            const hasPeri = earthPosFromState(periJdUtc, periPosVec);
+            const hasAph = earthPosFromState(aphJdUtc, aphPosVec);
+
+            if (sceneStateRef.current.perihelionMarker) {
+              if (hasPeri) {
+                sceneStateRef.current.perihelionMarker.position.copyFrom(periPosVec);
+              }
+            }
+            if (sceneStateRef.current.aphelionMarker) {
+              if (hasAph) {
+                sceneStateRef.current.aphelionMarker.position.copyFrom(aphPosVec);
+              }
+            }
+          }
+        } catch { }
+      }
+    } catch (e) {
+      console.warn('⚠️ Failed to build Earth orbit polyline:', e);
+    }
+  }, [wasmModule]);
 
   // ✅ Self-managed canvas
   return (
