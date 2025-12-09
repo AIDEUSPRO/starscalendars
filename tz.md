@@ -155,7 +155,7 @@ vite-plugin-wasm: 3.5.0 (latest stable)
 vite-plugin-top-level-await: 1.6.0 (latest stable)
 
 **Fullstack**:
-dioxus: 0.7.0-alpha.3 (ALPHA - cutting-edge, completely rewritten)
+dioxus: https://docs.rs/dioxus/0.7.2/dioxus/index.html (ALPHA - cutting-edge, completely rewritten)
 config: 0.14.1 / figment: 0.10.21 (latest stable)
 
 Принципы производительности и O(1)

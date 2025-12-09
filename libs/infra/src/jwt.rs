@@ -7,9 +7,9 @@ use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, deco
 // Use only domain types for Clean Architecture
 use crate::InfraError;
 use rand::thread_rng;
+use rsa::RsaPrivateKey;
 use rsa::pkcs1::EncodeRsaPrivateKey;
 use rsa::pkcs8::EncodePublicKey;
-use rsa::{RsaPrivateKey, RsaPublicKey};
 use starscalendars_domain::*;
 use uuid::Uuid;
 

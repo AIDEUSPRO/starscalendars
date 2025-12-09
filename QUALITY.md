@@ -15,13 +15,14 @@
 #### **Rust Anti-patterns (Compilation Blocking)**
 ```rust
 // ❌ FORBIDDEN - Will block commit/compilation
-unwrap()          // Use Result<T, E> with proper error handling
-expect("msg")     // Use Result<T, E> with custom error types  
-panic!("msg")     // Use Result<T, E> - never panic in production
-HashMap::new()    // Use HashMap::with_capacity(n) for O(1) performance
-Vec::new()        // Use Vec::with_capacity(n) for pre-allocation
-x as T           // Use TryFrom trait for safe type conversions
-unsafe { }       // Forbidden except in very specific WASM contexts
+unwrap()             // Use Result<T, E> with proper error handling
+expect("msg")        // Use Result<T, E> with custom error types  
+panic!("msg")        // Use Result<T, E> - never panic in production
+HashMap::new()       // Use HashMap::with_capacity(n) for O(1) performance
+Vec::new()           // Use Vec::with_capacity(n) for pre-allocation
+unwrap_or_default()  // Masks failures; use match/Default explicitly
+x as T              // Use TryFrom trait for safe type conversions
+unsafe { }          // Forbidden except in very specific WASM contexts
 
 // ✅ REQUIRED - Production-grade patterns
 Result<T, CustomError>     // Comprehensive error handling

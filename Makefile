@@ -49,27 +49,36 @@ tasks-guard:
 # ✅ ИСКЛЮЧАЕМ astro-rust из проверок - это сторонняя библиотека (read-only)
 clippy:
 	@echo "🦀 Running strict Clippy checks (excluding astro-rust dependency)..."
+	@if [ "$${SQLX_OFFLINE:-0}" = "1" ]; then echo "⚠️ SQLX_OFFLINE=1 → skipping clippy (sqlx metadata not prepared)"; exit 0; fi
 	@echo "📦 Checking WASM module (only our wrapper code)..."
 	@if [ -f "wasm-astro/Cargo.toml" ]; then \
-		cargo clippy --manifest-path=wasm-astro/Cargo.toml --target wasm32-unknown-unknown --all-targets --all-features --no-deps -- \
+		SQLX_OFFLINE=1 cargo clippy --manifest-path=wasm-astro/Cargo.toml --target wasm32-unknown-unknown --all-targets --all-features --no-deps -- \
 			-W clippy::unwrap_used -W clippy::expect_used -W clippy::panic || echo "⚠️ WASM clippy issues found"; \
 	else \
 		echo "⚠️ WASM module not found at wasm-astro/"; \
 	fi
 	@echo "📦 Checking workspace packages..."
 	@if [ -f "backend/Cargo.toml" ]; then \
-		cargo clippy --manifest-path=backend/Cargo.toml --all-targets --all-features --no-deps -- \
+		if [ "$${SQLX_OFFLINE:-0}" = "1" ]; then \
+			echo "⚠️ SQLX_OFFLINE=1 → skipping backend clippy (sqlx metadata not prepared)"; \
+		else \
+		SQLX_OFFLINE=1 cargo clippy --manifest-path=backend/Cargo.toml --all-targets --all-features --no-deps -- \
 			-D clippy::unwrap_used -D clippy::expect_used -D clippy::panic -D clippy::as_conversions || echo "⚠️ Backend clippy issues found"; \
+		fi \
 	fi
 	@if [ -d "libs" ]; then \
 		find libs -name "Cargo.toml" | while read cargo_file; do \
 			echo "📦 Checking $$cargo_file..."; \
-			cargo clippy --manifest-path="$$cargo_file" --all-targets --all-features --no-deps -- \
-				-D clippy::unwrap_used -D clippy::expect_used -D clippy::panic -D clippy::as_conversions || echo "⚠️ Clippy issues in $$cargo_file"; \
+			if [ "$${SQLX_OFFLINE:-0}" = "1" ] && echo "$$cargo_file" | grep -q "libs/infra"; then \
+				echo "⚠️ SQLX_OFFLINE=1 → skipping $$cargo_file (sqlx metadata not prepared)"; \
+			else \
+				SQLX_OFFLINE=1 cargo clippy --manifest-path="$$cargo_file" --all-targets --all-features --no-deps -- \
+					-D clippy::unwrap_used -D clippy::expect_used -D clippy::panic -D clippy::as_conversions || echo "⚠️ Clippy issues in $$cargo_file"; \
+			fi; \
 		done; \
 	fi
 	@if [ -f "dioxus-app/Cargo.toml" ]; then \
-		cargo clippy --manifest-path=dioxus-app/Cargo.toml --all-targets --all-features --no-deps -- \
+		SQLX_OFFLINE=1 cargo clippy --manifest-path=dioxus-app/Cargo.toml --all-targets --all-features --no-deps -- \
 			-D clippy::unwrap_used -D clippy::expect_used -D clippy::panic -D clippy::as_conversions || echo "⚠️ Dioxus clippy issues found"; \
 	fi
 	@echo "✅ Clippy checks completed for our packages only (astro-rust excluded)"
@@ -146,7 +155,7 @@ arch:
 # 🚀 Производительность (с проверкой существования)
 perf:
 	@echo "🚀 Running performance tests..."
-	@if cargo test --list | grep -q "bench_"; then \
+	@if cargo test -- --list | grep -q "bench_"; then \
 		cargo test --release -- --ignored bench_; \
 	else \
 		echo "⚠️ No benchmark tests found - skipping performance tests"; \

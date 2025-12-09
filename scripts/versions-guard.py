@@ -67,10 +67,15 @@ def verdict(pin: str, latest: str) -> str:
 outdated = []
 for name, pin in sorted(pins.items()):
     try:
-        latest = crates_io_latest(name)
+        latest_raw = crates_io_latest(name)
     except Exception as e:
         print(f'{name} pin={pin} latest=error: {e}')
         continue
+    # Skip prerelease-only bumps (rc/alpha/beta) to avoid forcing unstable upgrades
+    if '-' in latest_raw:
+        print(f'{name} pin={pin} latest={latest_raw} => SKIP (prerelease)')
+        continue
+    latest = latest_raw
     v = verdict(pin, latest)
     print(f'{name} pin={pin} latest={latest} => {v}')
     if v.startswith('OUTDATED'):

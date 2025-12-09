@@ -22,9 +22,9 @@ You are a **Quality Guardian** specializing in enforcing code quality standards,
 - Валидация полного покрытия astro-rust API в WASM обертке
 - Проверка отсутствия дублирования астрономической логики
 - Контроль соблюдения архитектурных принципов
-- Валидация контракта состояния WASM: буфер 11 f64, Sun[0..2]=0, Moon[3..5], Earth[6..8], Zenith[9..10]
+- Валидация контракта состояния WASM: буфер 15 f64 (Sun zeros [0..2], Moon dist AU [3], Earth RA/Dec/dist AU [4..6], Solar zenith lon/lat [7..8], sublunar lat/lon [9..10], Earth-local Moon unit vector [11..13], apparent sidereal time [14])
 - Проверка: ровно один `compute_state(jd)` вызов на кадр; события (`next_winter_solstice_from`) только вне рендера (idle)
-- ❌ Дублирование тригонометрии на фронте: при расширении STATE (RA/Dec Луны, AST, сублунарные φ/λ, Earth→Moon dir) фронт обязан потреблять числа без перерасчётов; один `compute_state` на кадр
+- ❌ Дублирование тригонометрии на фронте: STATE уже содержит RA/Dec Луны, AST, сублунарные φ/λ и Earth→Moon dir; фронт обязан потреблять числа без перерасчётов; один `compute_state` на кадр
 
 **🛡️ ENFORCEMENT PRIORITY**: Эти правила имеют наивысший приоритет - выше всех остальных quality checks!
 

@@ -38,7 +38,7 @@ StarsCalendars is a high-performance spiritual astronomy platform that provides:
 - **Thread-local buffers** for performance optimization
 - Output (bundler target) is written to `frontend/src/wasm-astro/` as `starscalendars_wasm_astro.js` + `*_bg.wasm`
 - Use left-handed Babylon system (default). Scientific coordinates remain RH (WASM). Apply single RH→LH Z flip in the scene when assigning positions; no flips in WASM bridge
-- Single-call per frame: `compute_state(jd)` returns 11 f64 values: Sun zeros, Moon xyz (geocentric), Earth xyz (heliocentric), and Solar zenith [lon_east_rad, lat_rad].
+- Single-call per frame: `compute_state(jd)` returns 15 f64 values (STATE): Sun zeros [0..2], Moon distance AU [3], Earth RA/Dec/dist AU [4..6], Solar zenith lon/lat (east+, rad) [7..8], sublunar lat/lon (rad, east+) [9..10], Earth-local unit vector to Moon [11..13], apparent sidereal time rad [14].
   - Sun slots [0..2] are zeros by design (Sun fixed at origin).
   - Event timing helper: `next_winter_solstice_from(jd_utc_start)` — off-frame only; high-precision λ_app(t)=270° solver (FK5 + aberration + nutation, TT↔UTC via TAI−UTC+32.184s), returns JD UTC.
 - Zenith marker placement is canonical and must not be altered:

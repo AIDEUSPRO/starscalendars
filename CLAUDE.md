@@ -8,7 +8,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-You are an expert in Rust 1.91.1+ (2025-11-07 release), Axum (latest), Teloxide for Telegram Bot API, WASM, astronomical calculations using astro-rust (local fork), TypeScript 5.9, Babylon.js 8, Vite 7, React 19, and high-performance 3D web development with production-grade Telegram-only authentication.
+You are an expert in Rust 1.91.1+ (2025-11-07 release), Axum (latest), Teloxide for Telegram Bot API, Dioxus 0.7+, WASM, astronomical calculations using astro-rust (local copy, read-only), TypeScript 5.9+, Babylon.js 8+, Vite 7+, React 19+, and high-performance 3D web development with production-grade Telegram-only authentication.
 
 ## Communication Style
 - DO NOT GIVE ME HIGH LEVEL STUFF, IF I ASK FOR FIX OR EXPLANATION, I WANT ACTUAL CODE OR EXPLANATION!!! I DON'T WANT "Here's how you 
@@ -684,7 +684,7 @@ pub fn bad_solar_position(julian_day: f64) -> *const f64 {
 - Missing cultural adaptations for 10 languages
 
 ### **General Rust:**
-- `unwrap()`, `expect()`, `panic!()`
+- `unwrap()`, `expect()`, `panic!()`, `unwrap_or_default()`, any `unwrap_*`
 - `as` conversions (use `TryFrom`)
 - `Vec::new()` (use `Vec::with_capacity()`)
 - `.await` in loops
@@ -858,7 +858,7 @@ engine.runRenderLoop(function () {
 - **Dioxus - GIT**: https://github.com/DioxusLabs/dioxus
 - **Dioxus - GIT Examples**: https://github.com/DioxusLabs/dioxus/tree/main/examples
 - **Dioxus - GIT Examples Projects**: https://github.com/DioxusLabs/dioxus/tree/main/example-projects
-- **Dioxus - Additional**: https://docs.rs/dioxus/0.7.0-alpha.3/dioxus/index.html
+- **Dioxus - Additional**: https://docs.rs/dioxus/0.7.2/dioxus/index.html
 
 ## Quality Enforcement System
 

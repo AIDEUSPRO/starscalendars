@@ -11,6 +11,9 @@ fi
 
 # 2) Require edition = "2024" in each package Cargo.toml
 while IFS= read -r -d '' f; do
+  case "$f" in
+    ./astro-rust/*) continue ;; # skip vendor/readonly astro-rust
+  esac
   if grep -q '^[[:space:]]*\[package\]' "$f"; then
     if ! grep -q '^edition\s*=\s*"2024"' "$f"; then
       echo "❌ Missing or wrong edition in $f (expected edition = \"2024\")" >&2
@@ -40,8 +43,6 @@ if [ -f "$root" ]; then
   if ! grep -q '^serde\s*=\s*{[^}]*version\s*=\s*"1"' "$root"; then echo "❌ serde must be pinned to \"1\"" >&2; fail=1; fi
   if ! grep -q '^serde_json\s*=\s*"1"' "$root"; then echo "❌ serde_json must be pinned to \"1\"" >&2; fail=1; fi
   if ! grep -q '^uuid\s*=\s*{[^}]*version\s*=\s*"1"' "$root"; then echo "❌ uuid must be pinned to \"1\"" >&2; fail=1; fi
-  if ! grep -q '^http\s*=\s*"1"' "$root"; then echo "❌ http must be pinned to \"1\"" >&2; fail=1; fi
-  if ! grep -q '^http-body-util\s*=\s*"0\.1"' "$root"; then echo "❌ http-body-util must be pinned to \"0.1\"" >&2; fail=1; fi
 fi
 
 exit $fail

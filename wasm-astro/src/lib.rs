@@ -417,7 +417,7 @@ pub fn earth_perihelion_aphelion_for_year_utc(year_utc: i32) -> *const f64 {
         // Create Date struct for January 1, year_utc, 00:00:00 UTC
         let date = astro::time::Date {
             year: year_utc as i16,
-            month: 1,
+            month: astro::time::Month::Jan,
             decimal_day: 1.0,
             cal_type: astro::time::CalType::Gregorian,
         };
