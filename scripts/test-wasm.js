@@ -49,7 +49,10 @@ console.log('\n🔬 Testing WASM module interface...');
 
 try {
   const wasmModulePath = resolve(wasmPkgPath, 'starscalendars_wasm_astro.js');
+  const wasmBinaryPath = resolve(wasmPkgPath, 'starscalendars_wasm_astro_bg.wasm');
+
   const wasmModule = await import('file://' + wasmModulePath);
+  const wasmBinary = await import('file://' + wasmBinaryPath); // Import WASM directly to access memory
 
   console.log('  ✅ WASM module loaded successfully');
 
@@ -95,25 +98,27 @@ try {
   const ptr = wasmModule.compute_state(2451545.0);
 
   if (ptr !== 0) {
-    const coordinateCount = 11;
+    const coordinateCount = 15;
 
-    const memory = wasmModule.memory;
+    const memory = wasmBinary.memory; // Access memory from the WASM binary export
     if (memory) {
       const positions = new Float64Array(memory.buffer, ptr, coordinateCount);
 
       console.log(`  ✅ Memory view created: Float64Array[${positions.length}]`);
       console.log(`  📊 State:`);
-      console.log(`     Sun xyz:    [${positions[0]?.toFixed(6)}, ${positions[1]?.toFixed(6)}, ${positions[2]?.toFixed(6)}]`);
-      console.log(`     Moon xyz:   [${positions[3]?.toFixed(6)}, ${positions[4]?.toFixed(6)}, ${positions[5]?.toFixed(6)}]`);
-      console.log(`     Earth xyz:  [${positions[6]?.toFixed(6)}, ${positions[7]?.toFixed(6)}, ${positions[8]?.toFixed(6)}]`);
-      console.log(`     Zenith lonE: ${positions[9]?.toFixed(6)} rad, lat: ${positions[10]?.toFixed(6)} rad`);
+      console.log(`     Sun zeros:    [${positions[0]?.toFixed(6)}, ${positions[1]?.toFixed(6)}, ${positions[2]?.toFixed(6)}]`);
+      console.log(`     Moon dist:    ${positions[3]?.toFixed(6)} AU`);
+      console.log(`     Earth RA/Dec: [${positions[4]?.toFixed(6)}, ${positions[5]?.toFixed(6)}] rad`);
+      console.log(`     Earth dist:   ${positions[6]?.toFixed(6)} AU`);
+      console.log(`     Zenith lonE:  ${positions[7]?.toFixed(6)} rad, lat: ${positions[8]?.toFixed(6)} rad`);
+      console.log(`     Sublunar:     lat: ${positions[9]?.toFixed(6)}, lonE: ${positions[10]?.toFixed(6)}`);
+      console.log(`     Moon Vec:     [${positions[11]?.toFixed(6)}, ${positions[12]?.toFixed(6)}, ${positions[13]?.toFixed(6)}]`);
+      console.log(`     AST:          ${positions[14]?.toFixed(6)} rad`);
 
       // Validate that we got reasonable astronomical values
-      const sunDistance = Math.sqrt(positions[0]**2 + positions[1]**2 + positions[2]**2);
-      const earthDistance = Math.sqrt(positions[6]**2 + positions[7]**2 + positions[8]**2);
+      const earthDistance = positions[6];
 
       console.log(`  📏 Distances:`);
-      console.log(`     Sun (geocentric):  ${sunDistance.toFixed(6)} AU`);
       console.log(`     Earth (heliocentric): ${earthDistance.toFixed(6)} AU`);
 
       if (earthDistance > 0.9 && earthDistance < 1.1) {

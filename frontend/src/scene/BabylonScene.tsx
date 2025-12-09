@@ -73,6 +73,7 @@ const MOON_ORBIT_RADIUS_UNITS = 200;
 const MEAN_LUNAR_DISTANCE_AU = 0.00257;
 // Scale factor so that mean lunar distance maps to ~200 units; preserves ellipse shape
 const MOON_UNITS_PER_AU = MOON_ORBIT_RADIUS_UNITS / MEAN_LUNAR_DISTANCE_AU;
+const STATE_STRIDE = 15;
 
 const computeScenePositionFromRaDec = (
   rightAscensionRad: number,
@@ -416,6 +417,15 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
     try {
       console.log('🎬 Initializing Babylon.js Scene...');
 
+      // Safety check: Dispose existing engine if any (prevents double initialization)
+      if (sceneStateRef.current.engine) {
+        console.warn('⚠️ Found existing engine during init, disposing...');
+        try {
+          sceneStateRef.current.engine.dispose();
+        } catch { }
+        sceneStateRef.current.engine = null;
+      }
+
       // ✅ CORRECT - Engine initialization with optimized settings for 60fps
       const engine = new Engine(canvas, true, {
         preserveDrawingBuffer: false,
@@ -736,6 +746,7 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
     planetMaterial.setTexture('nightTexture', earthNight);
     planetMaterial.setVector3('lightPosition', sunLight.position);
     planetMaterial.backFaceCulling = false;
+    planetMaterial.freeze(); // ✅ Optimization: freeze material to avoid per-frame recompilation checks
     earthMesh.material = planetMaterial;
     try {
       const applyDisp = () => {
@@ -801,6 +812,8 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
     // Clouds (NPOT) without mipmaps
     const cloudsTex = new Texture('/textures/earth-c.jpg', scene, false, false, Texture.BILINEAR_SAMPLINGMODE);
     cloudsMaterial.setTexture('cloudsTexture', cloudsTex);
+    cloudsMaterial.setVector3('lightPosition', sunLight.position); // Set static light pos once
+    cloudsMaterial.freeze(); // ✅ Optimization: freeze material (only camera pos updates needed via unfreeze/freeze pattern if strict, but setVector3 usually works)
     const cloudsMesh = MeshBuilder.CreateSphere('clouds', {
       diameter: earthDiameter + 2, // ENV_H = 2, based on DIAMETER
       segments: 300 // повторяем PLANET_V для совпадения геометрии
@@ -975,11 +988,9 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
       // ✅ Update shader uniforms for Earth/Clouds every frame
       if (sceneStateRef.current.cloudsShaderMaterial) {
         sceneStateRef.current.cloudsShaderMaterial.setVector3('cameraPosition', scene.activeCamera!.position);
-        sceneStateRef.current.cloudsShaderMaterial.setVector3('lightPosition', sunLight.position);
+        // lightPosition is static (0,0,0) and set at creation time
       }
-      if (sceneStateRef.current.earthShaderMaterial) {
-        sceneStateRef.current.earthShaderMaterial.setVector3('lightPosition', sunLight.position);
-      }
+      // earthShaderMaterial lightPosition is static (0,0,0) and set at creation time
 
       // ✅ TIME UPDATE - обновляем время каждую секунду (как в референсе строки 1331-1346)
       const nowEpochMs = Date.now();
@@ -1052,6 +1063,9 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
     };
     window.addEventListener('resize', handleResize);
 
+    // Store cleanup for this specific instance
+    (engine as any).__resizeHandler = handleResize;
+
     timer.mark('initialization_complete');
     console.log('✅ Babylon.js Scene Initialized Successfully at 60fps');
   }, [wasmModule]);
@@ -1073,30 +1087,7 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
   const rotMatrix = useMemo(() => Matrix.Identity(), []);
 
   // Compute sublunar lat/lon (deg) from current WASM buffer and JD using mean obliquity and apparent sidereal time
-  const computeSublunarLatLonDeg = useCallback((jd: number, wasm: WASMModule): { latDeg: number; lonDegEast: number } | null => {
-    if (!stateViewRef.current) return null;
-    const s = stateViewRef.current;
-    // Ecliptic Cartesian (geocentric): RH coords
-    const mx = s[3]!; const my = s[4]!; const mz = s[5]!;
-    const rXY = Math.hypot(mx, my);
-    const lon = Math.atan2(my, mx);               // λ
-    const lat = Math.atan2(mz, rXY);              // β
-    // Mean obliquity ε (rad)
-    const eps = typeof wasm.get_mean_obliquity === 'function' ? wasm.get_mean_obliquity(jd) : 0.4090928; // ~23.439° fallback
-    const sinE = Math.sin(eps), cosE = Math.cos(eps);
-    const sinL = Math.sin(lon), cosL = Math.cos(lon);
-    const tanB = Math.tan(lat);
-    // Equatorial RA/Dec (radians)
-    const ra = Math.atan2(sinL * cosE - tanB * sinE, cosL);
-    const dec = Math.asin(Math.sin(lat) * cosE + Math.cos(lat) * sinE * sinL);
-    // Apparent sidereal time (radians)
-    const ast = typeof wasm.get_apparent_sidereal_time === 'function' ? wasm.get_apparent_sidereal_time(jd) : 0;
-    // Sub-lunar longitude east-positive: wrap to [-π, π]
-    let lonE = ast - ra;
-    lonE = ((lonE + Math.PI) % (2 * Math.PI)) - Math.PI;
-    const toDeg = (x: number) => x * 180 / Math.PI;
-    return { latDeg: toDeg(dec), lonDegEast: toDeg(lonE) };
-  }, []);
+  // Removed computeSublunarLatLonDeg; now using pre-computed values from WASM STATE
 
   // Debug helper: derive lat/lon (east-positive) from an Earth-local direction vector
   // const localVecToLatLonDeg = useCallback((v: Vector3): { latDeg: number; lonDegEast: number } => {
@@ -1131,9 +1122,9 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
         return;
       }
 
-      // ✅ Zero-copy access via Float64Array view to WASM memory (STATE: 14 f64)
+      // ✅ Zero-copy access via Float64Array view to WASM memory (STATE: 15 f64)
       const mem = wasmModule.memory.buffer;
-      if (positionsPtr < 0 || positionsPtr + (14 * 8) > mem.byteLength) {
+      if (positionsPtr < 0 || positionsPtr + (STATE_STRIDE * 8) > mem.byteLength) {
         console.error('❌ STATE pointer out of bounds');
         return;
       }
@@ -1141,32 +1132,29 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
       if (stateViewRef.current === null ||
         statePtrRef.current !== positionsPtr ||
         memBufferRef.current !== mem) {
-        stateViewRef.current = new Float64Array(mem, positionsPtr, 14);
+        stateViewRef.current = new Float64Array(mem, positionsPtr, STATE_STRIDE);
         statePtrRef.current = positionsPtr;
         memBufferRef.current = mem;
       }
       const buf = stateViewRef.current as Float64Array;
-      // Buffer layout: Sun(0..2) geocentric, Moon(3..5) geocentric, Earth(6..8) heliocentric, Zenith(9..10)
-      const ex = buf[6]!, ey = buf[7]!, ez = buf[8]!;
-      const mx = buf[3]!, my = buf[4]!, mz = buf[5]!;
-      const earthRaRad = buf[11]!;
-      const earthDecRad = buf[12]!;
-      const earthDistanceAu = buf[13]!;
-      const sx = 0.0, sy = 0.0, sz = 0.0; // Sun at center in scene
+      // Buffer layout: Sun(0..2) zero, Moon dist(3), Earth RA/Dec(4..5), Dist(6), Zenith(7..8), Sublunar(9..10), MoonDir(11..13), AST(14)
+      const moonDistanceAu = buf[3]!;
+      const earthRaRad = buf[4]!;
+      const earthDecRad = buf[5]!;
+      const earthDistanceAu = buf[6]!;
+      // const sx = 0.0, sy = 0.0, sz = 0.0; // Sun at center in scene (unused)
 
       // Zenith from state buffer (radians)
-      const sunZenithLngRad = buf[9]!;
-      const sunZenithLatRad = buf[10]!;
-      const sunZenithLng = sunZenithLngRad * 180 / Math.PI;
-      const sunZenithLat = sunZenithLatRad * 180 / Math.PI;
+      const sunZenithLngRad = buf[7]!;
+      const sunZenithLatRad = buf[8]!;
 
-      const astronomicalData = {
-        sun: { x: sx, y: sy, z: sz, distance: 0, timestamp: currentTimeMs },
-        earth: { ra: earthRaRad, dec: earthDecRad, distance: earthDistanceAu, timestamp: currentTimeMs },
-        moon: { x: ex + mx, y: ey + my, z: ez + mz, distance: Math.hypot(mx, my, mz), timestamp: currentTimeMs },
-        earthSunDistance: earthDistanceAu,
-        sunZenithLat, sunZenithLng, sunZenithLatRad, sunZenithLngRad,
-      } as const;
+      // Lunar derived data from STATE
+      const sublunarLatRad = buf[9]!;
+      const sublunarLonRad = buf[10]!;
+      const moonLocalX = buf[11]!;
+      const moonLocalY = buf[12]!;
+      const moonLocalZ = buf[13]!;
+      // const apparentSiderealTime = buf[14]!; // Not currently used in scene visualization
 
       // yaw correction stored later into uProjVec.x/y (cos/sin) to avoid extra allocations
 
@@ -1204,8 +1192,8 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
 
         // ✅ Compute zenith marker in Earth-local space FIRST (untransformed Earth),
         // then orient pivot so this point looks exactly at scene origin
-        const latRad = astronomicalData.sunZenithLatRad;
-        const lonRad = astronomicalData.sunZenithLngRad; // east-positive
+        const latRad = sunZenithLatRad;
+        const lonRad = sunZenithLngRad; // east-positive
 
         if (sceneState.zenithMarker) {
           const r = CELESTIAL_BODIES.earth!.radius * 0.5; // visual radius
@@ -1348,26 +1336,19 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
 
       // ✅ MOON ORBITS AROUND EARTH
       if (sceneState.moonPivot) {
-        const mxAU = buf[3]!; const myAU = buf[4]!; const mzAU = buf[5]!;
-        const rUnits = Math.hypot(mxAU, myAU, mzAU) * MOON_UNITS_PER_AU;
+        const rUnits = moonDistanceAu * MOON_UNITS_PER_AU;
         const moonMesh = sceneState.celestialMeshes.get('moon');
-        // Compute sublunar lat/lon once per frame and reuse
-        const sub = computeSublunarLatLonDeg(julianDay, wasmModule);
-        let latRad: number | null = null;
-        let lonRad: number | null = null;
-        if (sub) {
-          latRad = sub.latDeg * Math.PI / 180;
-          lonRad = sub.lonDegEast * Math.PI / 180; // east-positive
-        }
 
-        if (moonMesh && latRad !== null && lonRad !== null && sceneState.earthPivot?.rotationQuaternion) {
-          const phiL = (Math.PI / 2) - latRad;
-          const thetaL = (-lonRad) + Math.PI;
-          const sinPhiL = Math.sin(phiL);
-          // Earth-local unit direction toward Moon
-          const lx = sinPhiL * Math.cos(thetaL);
-          const ly = Math.cos(phiL);
-          const lz = sinPhiL * Math.sin(thetaL);
+        // Use pre-computed sublunar data from WASM
+        const latRad = sublunarLatRad;
+        const lonRad = sublunarLonRad;
+
+        // Earth-local direction from WASM (already unit vector)
+        const lx = moonLocalX;
+        const ly = moonLocalY;
+        const lz = moonLocalZ;
+
+        if (moonMesh && sceneState.earthPivot?.rotationQuaternion) {
           // Transform local→world with Earth's current orientation
           const q = sceneState.earthPivot.rotationQuaternion;
           if (q) {
@@ -1385,7 +1366,7 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
         }
 
         // ✅ Place sublunar (lunar zenith) marker using the same sublunar coords
-        if (sceneState.lunarZenithMarker && sceneState.earthPivot && latRad !== null && lonRad !== null) {
+        if (sceneState.lunarZenithMarker && sceneState.earthPivot) {
           const r = CELESTIAL_BODIES.earth!.radius * 0.5;
           const phiL2 = (Math.PI / 2) - latRad;
           const thetaL2 = (-lonRad) + Math.PI;
@@ -1460,6 +1441,11 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
       console.log('🧹 Cleaning up Babylon.js scene...');
       const sceneState = sceneStateRef.current;
       if (sceneState.engine) {
+        // Cleanup resize listener
+        if ((sceneState.engine as any).__resizeHandler) {
+          window.removeEventListener('resize', (sceneState.engine as any).__resizeHandler);
+        }
+
         // In StrictMode dev, effects mount/unmount twice. Allow re-init by resetting guard.
         initializedRef.current = false;
         try {
@@ -1514,10 +1500,10 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
         const jd = jd0 + i;
         const ptr = wasmModule.compute_state(jd);
         if (!ptr) continue;
-        const view = new Float64Array(wasmModule.memory.buffer, ptr, 14);
-        const r = view[13]!;
-        const ra = view[11]!;
-        const dec = view[12]!;
+        const view = new Float64Array(wasmModule.memory.buffer, ptr, STATE_STRIDE);
+        const r = view[6]!;
+        const ra = view[4]!;
+        const dec = view[5]!;
         const p = scenePointFromRaDec(ra, dec, r);
         points.push(p);
         if (r < minR) { minR = r; perihelionPos = p.clone(); }
@@ -1572,10 +1558,10 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
             const earthPosFromState = (jdUtc: number, out: Vector3): boolean => {
               const p2 = wasmModule.compute_state(jdUtc);
               if (!p2) return false;
-              const v2 = new Float64Array(wasmModule.memory.buffer, p2, 14);
-              const ra2 = v2[11]!;
-              const dec2 = v2[12]!;
-              const dist2 = v2[13]!;
+              const v2 = new Float64Array(wasmModule.memory.buffer, p2, STATE_STRIDE);
+              const ra2 = v2[4]!;
+              const dec2 = v2[5]!;
+              const dist2 = v2[6]!;
               computeScenePositionFromRaDec(ra2, dec2, dist2 * scaleAU, out, scratchBase, scratchMatrix);
               return true;
             };

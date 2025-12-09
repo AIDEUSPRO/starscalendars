@@ -1,9 +1,40 @@
-# ❌ Rust Production Anti-Patterns — Zero Tolerance (2025)
+# ❌ Rust Production Anti-Patterns — Zero Tolerance (2025, Rust 1.91.1)
 
 > **Purpose**: Hard rules for production-grade high-load systems based on official Rust stdlib documentation  
 > **Sources**: https://doc.rust-lang.org/stable/std/ + performance research + production analysis  
-> **Updated**: January 2025 based on Rust 1.90+ stable documentation  
+> **Updated**: January 2025 based on Rust 1.90+ stable documentation (addenda for Rust 1.91.1 patch release[^rust1911])  
 > **Enforcement**: clippy/scripts/CI + mandatory agent compliance  
+
+---
+
+## 0) Rust 1.91.1 Toolchain & Platform Guardrails
+
+### 🎯 Mandatory Toolchain Pinning
+
+- CI/build images **must** pin `rustc`/`cargo` 1.91.1 to pick up the Wasm import fix and illumos locking patch.[^rust1911]
+- `rust-toolchain.toml` stays on `channel = "1.91.1"` (repo policy already forbids `rust-version` inside Cargo manifests).
+- Add `make toolchain-verify`: fails if `rustc --version` output lacks `1.91.1`.
+- Release checklist: `rustup run 1.91.1 cargo metadata --locked` before tagging; fail if toolchain drifts.
+
+### 🛰️ Wasm Import Regression Guardrail
+
+- Rust 1.91.0 had UB when multiple crates used `#[link(wasm_import_module)]`; 1.91.1 fixes it.[^rust1911]
+- Never build wasm-astro (or any Wasm target) on <1.91.1.
+- Add `scripts/test-wasm-imports.sh`: links two dummy crates with unique `wasm_import_module` values to catch regressions; run in CI.
+
+### ☀️ Cargo Target Locking on illumos / Shared Storage
+
+- 1.91.1 restores `File::lock` so Cargo can serialize writes; older toolchains corrupt `target/` on parallel builds.[^rust1911]
+- Guardrail:
+  - On illumos/network filesystems run smoke test `cargo check & cargo check` (expect success).
+  - Detection script should fall back to per-job `CARGO_TARGET_DIR` if locks are unsupported.
+
+### 📚 Documentation & Plan Sync
+
+- `anti.md` is authoritative; after merging content from other guidance (e.g., `rust-1.91.1-production-anti-patterns.md`), that file may be deleted.
+- When new Rust releases land, append a subsection here summarizing critical fixes + enforcement hooks.
+
+---
 
 ## 1) ERROR HANDLING: Zero-Tolerance Production Rules
 
@@ -12,10 +43,12 @@
 Based on official Result enum documentation:
 
 - **`unwrap()`, `expect()`, `panic!()`** — "Generally discouraged" per stdlib docs, kills availability
-- **ALL `unwrap_or*` family** — includes `unwrap_or(...)`, `unwrap_or_default()`, and `unwrap_or_else(...)`
+- **`unwrap_or(..)` / `unwrap_or_else(..)`** — eager default evaluation masks failures
 - **Custom unwrap variants** — `unwrap_u64`, `unwrap_str`, etc. - explicit type checking required
 - **Error suppression** — Ignoring `Result`/`Option` without explicit handling violates Rust principles
 - **Panic in libraries** — "Panics are meant for unrecoverable errors" - forces termination on users
+
+🔁 **Allowed narrow case**: `unwrap_or_default()` is acceptable *only* for trivially safe, zero-cost defaults (string, numeric, bool) where the success arm is identity and no side effects occur—matching repo policy. Everything else uses `match`/`if let`.
 
 ### ✅ MANDATORY PATTERNS (Per Official Documentation)
 
@@ -82,13 +115,15 @@ let v = match res { Ok(v) => v, Err(_) => fallback };
 let v = opt.map_or(fallback, |v| v);
 ```
 
-- unwrap_or_default():
+- unwrap_or_default() — **only** for trivial zero-cost defaults:
 ```rust
-// ❌ opt.unwrap_or_default()
-// ✅ Option
-let v = opt.map_or_else(Default::default, |v| v);
-// ✅ Result
-let v = match res { Ok(v) => v, Err(_) => Default::default() };
+// ✅ Allowed (string/number/bool, identity success arm, no side effects)
+let name: String = maybe_name.unwrap_or_default();
+// ❌ Use match if fallback allocates/does business logic
+let cfg = match fetch_cfg() {
+    Ok(v) => v,
+    Err(_) => build_cfg(), // fallback does work, so no unwrap_or_default
+};
 ```
 
 - unwrap_or_else(...):
@@ -192,6 +227,14 @@ tokio::task::spawn_blocking(move || {
 }).await??
 ```
 
+### ⏱️ REAL-TIME LATENCY & BOUNDED CONCURRENCY (Rust 1.91.1+)
+
+- **Budget every hop**: define p95/p99 latency targets per async pipeline; fail CI benches exceeding budgets (Tokio recommends explicit budgets for cooperative scheduling[^tokio]).
+- **Cap fan-out**: prefer `.buffered(N)` / `.buffer_unordered(N)` / `tokio::sync::Semaphore` to keep concurrency bounded.
+- **Yield manually**: CPU-bound loops call `tokio::task::yield_now().await` every ≤500 µs to keep runtimes responsive.
+- **Back-pressure channels**: use bounded `mpsc::channel(cap)` to avoid unbounded allocations; dropping messages requires explicit policy.
+- **Watchdogs**: expose heartbeat metrics (`tokio-metrics`, `tracing` spans) and fail readiness if loop lag > budget.
+
 ## 4) SQL/DATABASE: Compile-Time Safety
 
 ### 🚫 SQL INJECTION & PERFORMANCE KILLERS
@@ -292,7 +335,20 @@ tracing::info!(
 );
 ```
 
-## 8) AGENT COMPLIANCE: Mandatory Rules
+## 8) DOCUMENTATION & SAMPLE CODE HYGIENE
+
+- **No `unwrap`/`expect` in docs**: Rust API Guidelines require using `?` in examples so downstream users aren’t trained to panic.[^api]
+- Run `cargo test --doc` under `cargo clippy -- -D clippy::panic -D clippy::unwrap_used`.
+- README/tutorial snippets must compile and use the same structured error handling as production code; reviewers reject samples that deviate.
+
+## 9) UNSAFE / FFI CONTRACTS
+
+- Every `unsafe` block documents invariants and references the relevant Rustonomicon chapter.[^nomicon]
+- `extern "C"` functions spell out ownership/lifetime expectations and are wrapped behind safe APIs before exposure.
+- Manual `Send`/`Sync` impls require justification plus tests (loom, concurrency stress) proving correctness.
+- CI tracks `unsafe` deltas via `cargo geiger`; PR reviewers must sign off on any increase.
+
+## 10) AGENT COMPLIANCE: Mandatory Rules
 
 ### All Specialized Agents MUST:
 
@@ -309,7 +365,7 @@ tracing::info!(
 - **Validate compliance** - check every suggestion against zero-tolerance rules
 - **Explain reasoning** - cite official Rust documentation sources
 
-## 9) ENFORCEMENT: Quality Gates
+## 11) ENFORCEMENT: Quality Gates
 
 ### CI/CD Pipeline Requirements:
 
@@ -327,6 +383,8 @@ rg -n "panic!\(" --type rust .        # Fail on panic usage
 - **Anti-pattern detection** - Automated scanning in CI
 - **Agent validation** - All agent outputs must comply
 - **Documentation compliance** - Agents must reference official sources
+- **Toolchain compliance** - `make toolchain-verify` fails if `rustc` ≠ 1.91.1
+- **Wasm import regression test** - `scripts/test-wasm-imports.sh` runs in CI for wasm-astro
 
 ---
 
@@ -338,6 +396,10 @@ rg -n "panic!\(" --type rust .        # Fail on panic usage
 - [Result IntoIter](https://doc.rust-lang.org/stable/core/result/struct.IntoIter.html)
 - [Result Iter](https://doc.rust-lang.org/stable/core/result/struct.Iter.html)
 - [Result IterMut](https://doc.rust-lang.org/stable/core/result/struct.IterMut.html)
+- [Rustonomicon](https://doc.rust-lang.org/nomicon/)
+- [Tokio Topics: Bridging with sync code](https://tokio.rs/tokio/topics/bridging)
+- [Rust API Guidelines](https://rust-lang.github.io/api-guidelines/documentation.html)
+- [Announcing Rust 1.91.1](https://blog.rust-lang.org/2025/11/10/Rust-1.91.1/)
 
 ### Error Handling Philosophy:
 > "Panics are meant for unrecoverable errors" - Official Rust Documentation  
@@ -346,4 +408,9 @@ rg -n "panic!\(" --type rust .        # Fail on panic usage
 
 ---
 
-**🎯 Zero-Tolerance Rule**: This document defines hard requirements based on official Rust documentation. All violations block CI/CD and prevent deployment. Agents MUST validate against these rules before generating any code.
+**🎯 Zero-Tolerance Rule**: This document defines hard requirements based on official Rust documentation and the Rust 1.91.1 release guidance. All violations block CI/CD and prevent deployment. Agents MUST validate against these rules before generating any code.
+
+[^api]: Rust API Guidelines, checklist item C-QUESTION-MARK — examples should prefer `?` over `unwrap`.
+[^tokio]: Tokio Topics “Bridging with sync code” — explains yielding and bounded blocking in cooperative schedulers.
+[^nomicon]: *The Rustonomicon*, chapters “Ownership and Borrowing” / “Send and Sync”.
+[^rust1911]: *Announcing Rust 1.91.1*, Rust Blog (2025‑11‑10) — fixes Wasm import-module regression and re-enables `File::lock` on illumos.

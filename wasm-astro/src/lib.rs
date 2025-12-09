@@ -216,17 +216,19 @@ pub fn init() {
 // Legacy compute_all API removed. Use compute_state(julian_day).
 
 /// Compute main state in a single call (future-extensible):
-/// Layout [14 f64]:
+/// Layout [15 f64]:
 /// - Sun(0..2): zeros by design (Sun fixed at scene origin; skip per-frame solar math)
-/// - Moon(3..5): geocentric ecliptic Cartesian (x,y,z) in AU
-/// - Earth(6..8): heliocentric ecliptic Cartesian (x,y,z) in AU
-/// - Zenith(9..10): Solar zenith [lon_east_rad, lat_rad]
-/// - Earth RA/Dec(11..12): heliocentric equatorial coordinates (radians)
-/// - Earth distance(13): heliocentric radius vector (AU)
+/// - Moon distance(3): geocentric distance in AU
+/// - Earth RA/Dec(4..5): heliocentric equatorial coordinates (radians)
+/// - Earth distance(6): heliocentric radius vector (AU)
+/// - Zenith(7..8): Solar zenith [lon_east_rad, lat_rad]
+/// - Moon sublunar(9..10): [lat_rad, lon_east_rad] (geocentric, Earth surface point)
+/// - Moon direction(11..13): Earth-local unit vector toward Moon [x, y, z]
+/// - Apparent sidereal time(14): radians
 #[wasm_bindgen]
 pub fn compute_state(julian_day: f64) -> *const f64 {
     thread_local! {
-        static STATE_BUFFER: RefCell<[f64; 14]> = const { RefCell::new([0.0; 14]) };
+        static STATE_BUFFER: RefCell<[f64; 15]> = const { RefCell::new([0.0; 15]) };
     }
 
     STATE_BUFFER.with(|buffer| {
@@ -241,42 +243,69 @@ pub fn compute_state(julian_day: f64) -> *const f64 {
             }
         };
 
-        // Nutation for precision
+        // --- Shared astronomical values (computed once) ---
+        // Nutation
         let (nut_long, nut_oblq) = astro::nutation::nutation(jd);
+        // Obliquity
         let mean_oblq = astro::ecliptic::mn_oblq_IAU(jd);
         let true_oblq = mean_oblq + nut_oblq;
+        // Sidereal time
+        let mean_sidereal = astro::time::mn_sidr(jd);
+        let apparent_sidereal = astro::time::apprnt_sidr(mean_sidereal, nut_long, true_oblq);
 
-        // Sun position/derived values are not used in hot path; keep zeros to minimize per-frame work
-        out[0] = 0.0; // reserved
-        out[1] = 0.0; // reserved
-        out[2] = 0.0; // reserved
+        // Sun zeros (0..2)
+        out[0] = 0.0;
+        out[1] = 0.0;
+        out[2] = 0.0;
 
-        // Moon geocentric
+        // Moon distance (3)
         let (moon_ecl, moon_dist_km) = astro::lunar::geocent_ecl_pos(jd);
         let moon_dist_au = moon_dist_km / 149597870.7;
-        let moon_corrected_long = moon_ecl.long + nut_long;
-        let moon_pos = ecliptic_to_cartesian(moon_corrected_long, moon_ecl.lat, moon_dist_au);
-        out[3] = moon_pos.x;
-        out[4] = moon_pos.y;
-        out[5] = moon_pos.z;
+        out[3] = moon_dist_au;
 
-        // Earth heliocentric
+        let moon_corrected_long = moon_ecl.long + nut_long;
+
+        // Earth RA/Dec/Dist (4..6)
         let (earth_long, earth_lat, earth_r) =
             astro::planet::heliocent_coords(&astro::planet::Planet::Earth, jd);
-        let earth_pos = ecliptic_to_cartesian(earth_long, earth_lat, earth_r);
-        out[6] = earth_pos.x;
-        out[7] = earth_pos.y;
-        out[8] = earth_pos.z;
+
         let earth_ra = astro::coords::asc_frm_ecl(earth_long, earth_lat, true_oblq);
         let earth_dec = astro::coords::dec_frm_ecl(earth_long, earth_lat, true_oblq);
-        out[11] = astro::angle::limit_to_two_PI(earth_ra);
-        out[12] = earth_dec;
-        out[13] = earth_r;
 
-        // Solar zenith in radians (lon E+, lat N+)
-        let (zenith_lon_east_rad, zenith_lat_rad) = solar_zenith_position_rad_internal(jd);
-        out[9] = zenith_lon_east_rad;
-        out[10] = zenith_lat_rad;
+        out[4] = astro::angle::limit_to_two_PI(earth_ra);
+        out[5] = earth_dec;
+        out[6] = earth_r;
+
+        // Solar zenith (7..8)
+        let (zenith_lon_east_rad, zenith_lat_rad) = solar_zenith_position_rad_internal(
+            jd,
+            nut_long,
+            true_oblq,
+            mean_sidereal,
+            apparent_sidereal,
+        );
+        out[7] = zenith_lon_east_rad;
+        out[8] = zenith_lat_rad;
+
+        // Moon sublunar (9..10)
+        let (sublunar_lat_rad, sublunar_lon_east_rad) = compute_sublunar_position_internal(
+            moon_corrected_long,
+            moon_ecl.lat,
+            true_oblq,
+            apparent_sidereal,
+        );
+        out[9] = sublunar_lat_rad;
+        out[10] = sublunar_lon_east_rad;
+
+        // Moon direction Earth-local (11..13)
+        let (moon_local_x, moon_local_y, moon_local_z) =
+            compute_earth_local_moon_direction(sublunar_lat_rad, sublunar_lon_east_rad);
+        out[11] = moon_local_x;
+        out[12] = moon_local_y;
+        out[13] = moon_local_z;
+
+        // Apparent sidereal time (14)
+        out[14] = apparent_sidereal;
 
         out.as_ptr()
     })
@@ -1005,8 +1034,15 @@ pub fn get_moon_horizontal_parallax(distance_km: f64) -> f64 {
 // calculate_solar_zenith_position removed; zenith is included in compute_state.
 
 /// Internal helper: compute solar zenith position in radians (lon E-positive, lat N-positive)
+/// Uses pre-computed astronomical values to avoid redundant calculations
 #[inline]
-fn solar_zenith_position_rad_internal(julian_day: f64) -> (f64, f64) {
+fn solar_zenith_position_rad_internal(
+    julian_day: f64,
+    nut_long: f64,
+    true_oblq: f64,
+    _mean_sidereal_time: f64, // Kept for API consistency if needed later, but apparent is sufficient
+    apparent_sidereal_time: f64,
+) -> (f64, f64) {
     // Geocentric solar ecliptic position with high-precision corrections
     let (sun_ecl, sun_dist_au) = astro::sun::geocent_ecl_pos(julian_day);
     // FK5 conversion (longitude/latitude)
@@ -1014,18 +1050,20 @@ fn solar_zenith_position_rad_internal(julian_day: f64) -> (f64, f64) {
         astro::sun::ecl_coords_to_FK5(julian_day, sun_ecl.long, sun_ecl.lat);
     // Annual aberration in ecliptic longitude
     let ab_long = astro::aberr::sol_aberr(sun_dist_au);
-    // Nutation and true obliquity
-    let (nut_long, nut_oblq) = astro::nutation::nutation(julian_day);
-    let mean_oblq = astro::ecliptic::mn_oblq_IAU(julian_day);
-    let true_oblq = mean_oblq + nut_oblq;
+
+    // Use pre-computed values passed from caller:
+    // - nutation (nut_long)
+    // - true obliquity (true_oblq)
+
     let sun_corrected_long = sun_long_fk5 + ab_long + nut_long;
-    // Equatorial coordinates (apparent)
+
+    // Equatorial coordinates (apparent) using pre-computed obliquity
     let sun_right_ascension =
         astro::coords::asc_frm_ecl(sun_corrected_long, sun_lat_fk5, true_oblq);
     let sun_declination = astro::coords::dec_frm_ecl(sun_corrected_long, sun_lat_fk5, true_oblq);
-    // Sidereal time (apparent)
-    let mean_sidereal_time = astro::time::mn_sidr(julian_day);
-    let apparent_sidereal_time = astro::time::apprnt_sidr(mean_sidereal_time, nut_long, true_oblq);
+
+    // Use pre-computed apparent sidereal time
+
     // Zenith longitude east-positive
     let mut zenith_longitude_rad = apparent_sidereal_time - sun_right_ascension;
     let two_pi_limited = astro::angle::limit_to_two_PI(zenith_longitude_rad);
@@ -1342,7 +1380,21 @@ mod tests {
 
     #[test]
     fn test_solar_zenith_position_calculation() {
-        let (lon_east_rad, lat_rad) = solar_zenith_position_rad_internal(2451545.0);
+        let jd = 2451545.0;
+        // Compute prerequisites manually for test
+        let (nut_long, nut_oblq) = astro::nutation::nutation(jd);
+        let mean_oblq = astro::ecliptic::mn_oblq_IAU(jd);
+        let true_oblq = mean_oblq + nut_oblq;
+        let mean_sidereal = astro::time::mn_sidr(jd);
+        let apparent_sidereal = astro::time::apprnt_sidr(mean_sidereal, nut_long, true_oblq);
+
+        let (lon_east_rad, lat_rad) = solar_zenith_position_rad_internal(
+            jd,
+            nut_long,
+            true_oblq,
+            mean_sidereal,
+            apparent_sidereal,
+        );
         // Longitude should be within [-π, π]
         assert!(
             lon_east_rad >= -std::f64::consts::PI && lon_east_rad <= std::f64::consts::PI,
@@ -1401,4 +1453,53 @@ mod tests {
             declination
         );
     }
+}
+
+/// Internal helper: compute lunar sublunar position
+///
+/// Calculates geocentric latitude and longitude (east-positive) of the sublunar point.
+/// Uses pre-computed values to avoid redundant astro calculations.
+fn compute_sublunar_position_internal(
+    moon_ecl_long: f64,
+    moon_ecl_lat: f64,
+    true_oblq: f64,
+    apparent_sidereal: f64,
+) -> (f64, f64) {
+    // Convert ecliptic to equatorial (RA/Dec)
+    let moon_ra = astro::coords::asc_frm_ecl(moon_ecl_long, moon_ecl_lat, true_oblq);
+    let moon_dec = astro::coords::dec_frm_ecl(moon_ecl_long, moon_ecl_lat, true_oblq);
+
+    // Sublunar longitude (east-positive): AST - RA, wrapped to [-π, π]
+    // Corresponds to the point on Earth where the Moon is at zenith
+    let mut lon_east = apparent_sidereal - moon_ra;
+    lon_east =
+        ((lon_east + std::f64::consts::PI) % (2.0 * std::f64::consts::PI)) - std::f64::consts::PI;
+
+    // Sublunar latitude = Moon's declination
+    let lat = moon_dec;
+
+    (lat, lon_east)
+}
+
+/// Internal helper: compute Earth-local unit vector pointing toward Moon
+///
+/// Input: sublunar lat/lon (radians, north/east positive)
+/// Output: (x, y, z) unit vector in Earth-local spherical coordinates
+/// Used for visual tidal lock and positioning Moon in Earth's local frame
+fn compute_earth_local_moon_direction(lat_rad: f64, lon_east_rad: f64) -> (f64, f64, f64) {
+    // Convert lat/lon to spherical coordinates
+    // phi = co-latitude (from North Pole)
+    // theta = azimuth (adjusted for coordinate system: West-positive + PI to match Babylon scene logic)
+    let phi = (std::f64::consts::PI / 2.0) - lat_rad;
+    let theta = -lon_east_rad + std::f64::consts::PI;
+
+    let sin_phi = phi.sin();
+    // x = r * sin(phi) * cos(theta)
+    // y = r * cos(phi)  (Y is up/North)
+    // z = r * sin(phi) * sin(theta)
+    let x = sin_phi * theta.cos();
+    let y = phi.cos();
+    let z = sin_phi * theta.sin();
+
+    (x, y, z)
 }
