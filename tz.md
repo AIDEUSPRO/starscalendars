@@ -34,6 +34,161 @@
 - **Камера** (ArcRotateCamera) по умолчанию смотрит на Землю для лучшего обзора системы
 - **Масштабирование**: 700 ед/1 AU (как в референсной сцене) для орбитальной сцены. Размеры тел (DIAMETER семантика для Babylon mesh): Earth=50, Moon=20, Sun=40. ENV_H=2 для оболочки облаков.
 
+## 🎬 ДЕТАЛЬНЫЙ АЛГОРИТМ РЕАЛИЗАЦИИ 3D СЦЕНЫ (с нуля)
+
+### Система координат
+- **Babylon.js**: левосторонняя (X right, Y up, Z forward) — default
+- **WASM/astro-rust**: правосторонняя (научная)
+- **Единственный RH→LH flip**: при присвоении позиций в сцене: `z_babylon = -z_wasm`
+
+### Масштабирование
+```
+SCALE = 700        // units per AU
+EARTH_DIAMETER = 50
+MOON_DIAMETER = 20
+SUN_DIAMETER = 40
+ENV_H = 2          // cloud envelope height
+```
+
+### Структура сцены
+```
+Scene
+├── Sun (PointLight + mesh) at (0,0,0) — НИКОГДА не перемещать
+├── earthPivot (TransformNode) — rotationQuaternion для ориентации
+│   ├── earthMesh (Sphere + ShaderMaterial)
+│   │   ├── zenithMarker (red, local to Earth)
+│   │   └── lunarZenithMarker (green, local to Earth)
+│   └── earthOrbitLine (рисуется ОДИН РАЗ при init)
+├── moonMesh (Sphere + StandardMaterial)
+└── ArcRotateCamera (target = earthMesh.position)
+```
+
+### Алгоритм позиционирования (render loop)
+
+**Один раз на кадр:**
+```typescript
+const ptr = wasm.compute_state(jd);
+const buf = new Float64Array(memory.buffer, ptr, 15);
+```
+
+**Earth position:**
+```typescript
+// RA/Dec → Cartesian (ecliptic), затем RH→LH flip
+const earthRa = buf[4];
+const earthDec = buf[5];
+const earthDist = buf[6];
+
+// Ecliptic spherical → Cartesian
+const cosLat = Math.cos(earthDec);
+const ex = earthDist * cosLat * Math.cos(earthRa);
+const ey = earthDist * cosLat * Math.sin(earthRa);
+const ez = earthDist * Math.sin(earthDec);
+
+// Apply scale + RH→LH Z flip
+earthPivot.position.set(ex * SCALE, ey * SCALE, -ez * SCALE);
+```
+
+**Earth orientation (для zenith):**
+```typescript
+const zenithLon = buf[7];  // east+, radians
+const zenithLat = buf[8];  // north+, radians
+
+// Euler → Quaternion: pivot.y, pivot.z, pivot.x
+const yaw = -((-zenithLon) + Math.PI);
+const pitch = zenithLat;
+const roll = zenithLat;
+
+earthPivot.rotationQuaternion = Quaternion.FromEulerAngles(roll, yaw, pitch);
+```
+
+**Moon position:**
+```typescript
+const moonDist = buf[3];  // AU
+const moonX = buf[11];
+const moonY = buf[12];
+const moonZ = buf[13];
+
+// Transform Earth-local vector через earthPivot rotation
+const moonDir = new Vector3(moonX, moonY, moonZ);
+moonDir.rotateByQuaternionToRef(earthPivot.rotationQuaternion, moonDir);
+
+// Moon position = Earth position + rotated direction * scaled distance
+const moonDistScaled = moonDist * SCALE * MOON_ORBIT_MULTIPLIER;  // художественное масштабирование
+moonMesh.position.copyFrom(earthPivot.position);
+moonMesh.position.addInPlace(moonDir.scale(moonDistScaled));
+```
+
+**Zenith marker (local to Earth):**
+```typescript
+// Маркер уже позиционирован локально относительно earthMesh
+// phi = (π/2) - zenithLat, theta = (-zenithLon) + π
+const phi = (Math.PI / 2) - zenithLat;
+const theta = (-zenithLon) + Math.PI;
+const sinPhi = Math.sin(phi);
+
+const markerX = sinPhi * Math.cos(theta);
+const markerY = Math.cos(phi);
+const markerZ = sinPhi * Math.sin(theta);
+
+zenithMarker.position.set(markerX * EARTH_RADIUS, markerY * EARTH_RADIUS, markerZ * EARTH_RADIUS);
+```
+
+**Lunar zenith marker (local to Earth):**
+```typescript
+const sublunarLat = buf[9];
+const sublunarLon = buf[10];
+
+const phiMoon = (Math.PI / 2) - sublunarLat;
+const thetaMoon = (-sublunarLon) + Math.PI;
+const sinPhiMoon = Math.sin(phiMoon);
+
+lunarZenithMarker.position.set(
+  sinPhiMoon * Math.cos(thetaMoon) * EARTH_RADIUS,
+  Math.cos(phiMoon) * EARTH_RADIUS,
+  sinPhiMoon * Math.sin(thetaMoon) * EARTH_RADIUS
+);
+```
+
+### React 19 интеграция (StrictMode-safe)
+```typescript
+const initializedRef = useRef(false);
+const engineRef = useRef<Engine | null>(null);
+
+useEffect(() => {
+  if (initializedRef.current) return;
+  initializedRef.current = true;
+  
+  // Dispose old engine if exists (StrictMode double-mount)
+  if (engineRef.current) {
+    engineRef.current.dispose();
+  }
+  
+  const engine = new Engine(canvas, true);
+  engineRef.current = engine;
+  
+  // ... setup scene ...
+  
+  engine.runRenderLoop(() => scene.render());
+  
+  return () => {
+    engine.dispose();
+    engineRef.current = null;
+  };
+}, []);
+```
+
+### Performance правила
+- ❌ new Vector3/Quaternion в render loop — pre-allocate через useMemo
+- ❌ Duplicate WASM calls — ровно ОДИН compute_state на кадр
+- ❌ Material не frozen — вызвать material.freeze() после создания
+- ✅ Zero-copy Float64Array view
+- ✅ Orbit line рисуется ОДИН РАЗ при init
+
+### GUI
+- FPS: HTML div `#stats` overlay
+- Date/NT: Babylon.js AdvancedDynamicTexture
+- Никаких других HTML overlays
+
 Высокоуровневая архитектура (чистая)
 Слои и зависимости (внешние слои зависят от внутренних только через интерфейсы/абстракции):
 
@@ -112,6 +267,140 @@ pub fn bad_solar_position(julian_day: f64) -> *const f64 {
 - ✅ **Производительность O(1)** для горячего пути рендеринга
 - 🛡️ **Гарантия**: никаких mock-данных или отсебятины
 
+## 🔧 ДЕТАЛЬНЫЙ АЛГОРИТМ РЕАЛИЗАЦИИ WASM ОБЕРТКИ (с нуля)
+
+### ⚠️ КОНТРАКТ ПОСТОЯННО РАСШИРЯЕТСЯ
+Обертка пишется с нуля под нужды сцены. При расширении:
+- Добавлять новые слоты в конец буфера
+- НЕ менять индексы существующих
+- Синхронизировать: README.md, CLAUDE.md, .cursorrules, init.ts, BabylonScene.tsx, agents
+
+### STATE Buffer Layout (15 f64) — назначение для сцены
+
+| Slots | Данные | Использование в сцене |
+|-------|--------|----------------------|
+| [0..2] | Sun zeros | Солнце статично в (0,0,0), не обновляется |
+| [3] | Moon dist AU | Масштабирование орбиты Луны |
+| [4] | Earth RA rad | Долгота Земли на орбите |
+| [5] | Earth Dec rad | Широта Земли на орбите |
+| [6] | Earth dist AU | Расстояние Земля-Солнце |
+| [7] | Zenith lon rad | Ориентация earthPivot (yaw) |
+| [8] | Zenith lat rad | Ориентация earthPivot (pitch) |
+| [9] | Sublunar lat rad | Зеленый маркер Y |
+| [10] | Sublunar lon rad | Зеленый маркер XZ |
+| [11..13] | Moon direction | Единичный вектор Земля→Луна |
+| [14] | AST rad | Apparent sidereal time |
+
+### Алгоритм compute_state(julian_day)
+
+**Шаг 1: Валидация JD**
+- Проверить что JD > 0 и finite
+- При ошибке вернуть null pointer
+
+**Шаг 2: Общие астрономические величины (вычислить ОДИН РАЗ)**
+```
+nut_long, nut_oblq = astro::nutation::nutation(jd)
+mean_oblq = astro::ecliptic::mn_oblq_IAU(jd)
+true_oblq = mean_oblq + nut_oblq
+mean_sidereal = astro::time::mn_sidr(jd)
+apparent_sidereal = astro::time::apprnt_sidr(mean_sidereal, nut_long, true_oblq)
+```
+
+**Шаг 3: Sun (slots 0..2)**
+- Записать zeros [0,0,0] — Солнце статично в центре
+
+**Шаг 4: Moon distance (slot 3)**
+```
+moon_ecl, moon_dist_km = astro::lunar::geocent_ecl_pos(jd)
+moon_dist_au = moon_dist_km / 149597870.7
+moon_corrected_long = moon_ecl.long + nut_long
+out[3] = moon_dist_au
+```
+
+**Шаг 5: Earth RA/Dec/Dist (slots 4..6)**
+```
+earth_long, earth_lat, earth_r = astro::planet::heliocent_coords(Planet::Earth, jd)
+earth_ra = astro::coords::asc_frm_ecl(earth_long, earth_lat, true_oblq)
+earth_dec = astro::coords::dec_frm_ecl(earth_long, earth_lat, true_oblq)
+out[4] = astro::angle::limit_to_two_PI(earth_ra)
+out[5] = earth_dec
+out[6] = earth_r
+```
+
+**Шаг 6: Solar Zenith (slots 7..8)**
+```
+sun_ecl, sun_dist_au = astro::sun::geocent_ecl_pos(jd)
+sun_long_fk5, sun_lat_fk5 = astro::sun::ecl_coords_to_FK5(jd, sun_ecl.long, sun_ecl.lat)
+ab_long = astro::aberr::sol_aberr(sun_dist_au)
+sun_corrected_long = sun_long_fk5 + ab_long + nut_long
+
+sun_ra = astro::coords::asc_frm_ecl(sun_corrected_long, sun_lat_fk5, true_oblq)
+sun_dec = astro::coords::dec_frm_ecl(sun_corrected_long, sun_lat_fk5, true_oblq)
+
+zenith_lon = wrap_to_pi(apparent_sidereal - sun_ra)  // [-π, π]
+zenith_lat = sun_dec
+
+out[7] = zenith_lon
+out[8] = zenith_lat
+```
+
+**Шаг 7: Moon Sublunar (slots 9..10)**
+```
+moon_ra = astro::coords::asc_frm_ecl(moon_corrected_long, moon_ecl.lat, true_oblq)
+moon_dec = astro::coords::dec_frm_ecl(moon_corrected_long, moon_ecl.lat, true_oblq)
+
+sublunar_lon = wrap_to_pi(apparent_sidereal - moon_ra)
+sublunar_lat = moon_dec
+
+out[9] = sublunar_lat
+out[10] = sublunar_lon
+```
+
+**Шаг 8: Moon Direction Earth-local (slots 11..13)**
+```
+phi = (π/2) - sublunar_lat
+theta = -sublunar_lon + π
+
+sin_phi = sin(phi)
+x = sin_phi * cos(theta)
+y = cos(phi)
+z = sin_phi * sin(theta)
+
+out[11] = x
+out[12] = y
+out[13] = z
+```
+
+**Шаг 9: Apparent Sidereal Time (slot 14)**
+```
+out[14] = apparent_sidereal
+```
+
+### Helper: wrap_to_pi(angle)
+```
+two_pi = 2π
+wrapped = angle mod two_pi  // [0, 2π)
+if wrapped > π: wrapped -= two_pi
+return wrapped  // [-π, π]
+```
+
+### Off-frame функции
+
+**next_winter_solstice_from(jd_utc_start):**
+- Newton solver для λ_app(t) = 270°
+- λ_app = sun_long_fk5 + ab_long + nut_long (FK5 + aberration + nutation)
+- Работать в TT, результат конвертировать в UTC через timescales
+
+**get_quantum_time_components(epoch_ms, tz_offset_min):**
+- Построить таблицу квантовых дат один раз
+- Binary search по epoch_ms
+- Вернуть [d_in_decade, decade_index, year_index]
+
+### Timescales модуль
+- UTC→TT: jd_tt = jd_utc + (TAI−UTC + 32.184) / 86400
+- TT→UTC: обратно
+- Таблица leap seconds встроена (последний 2017-01 = 37s)
+
 ### **🔒 ДЛЯ ВСЕХ РАЗРАБОТЧИКОВ - КРИТИЧЕСКИ ВАЖНО:**
 - При добавлении новых функций в WASM: используй ТОЛЬКО astro-rust API
 - Никогда не изменяй файлы в папке `./astro-rust/` - она неприкосновенна
@@ -155,7 +444,7 @@ vite-plugin-wasm: 3.5.0 (latest stable)
 vite-plugin-top-level-await: 1.6.0 (latest stable)
 
 **Fullstack**:
-dioxus: https://docs.rs/dioxus/0.7.2/dioxus/index.html (ALPHA - cutting-edge, completely rewritten)
+dioxus: 0.7 (stable; docs: https://docs.rs/dioxus/0.7.2/dioxus/index.html)
 config: 0.14.1 / figment: 0.10.21 (latest stable)
 
 Принципы производительности и O(1)

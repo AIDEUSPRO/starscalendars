@@ -47,6 +47,30 @@ StarsCalendars is a high-performance spiritual astronomy platform that provides:
   - Pivot orientation: `pivot.y = -((-lon_east_rad)+π)`, `pivot.z = lat`, `pivot.x = lat`; Earth mesh rotations remain zero
   - Moon orbit must follow pivot tilt/azimuth
 
+### ⚠️ WASM Contract Evolution
+**Контракт постоянно расширяется** — обертка пишется с нуля под нужды сцены.
+
+**Назначение каждого слота STATE для сцены:**
+| Slots | Данные | Использование |
+|-------|--------|---------------|
+| [0..2] | Sun zeros | Солнце статично, не обновляется |
+| [3] | Moon dist AU | Масштабирование орбиты Луны |
+| [4..6] | Earth RA/Dec/dist | Позиция Земли вокруг Солнца |
+| [7..8] | Zenith lon/lat | Ориентация earthPivot |
+| [9..10] | Sublunar lat/lon | Зеленый маркер на Земле |
+| [11..13] | Moon direction | Единичный вектор Земля→Луна |
+| [14] | AST | Apparent sidereal time |
+
+**При расширении:**
+- Добавлять новые слоты в конец буфера
+- Не менять индексы существующих
+- Синхронизировать: tz.md, CLAUDE.md, .cursorrules, init.ts, BabylonScene.tsx, agents
+
+**Планируемые расширения:**
+- `next_summer_solstice_from`, `next_vernal_equinox_from`, `next_autumnal_equinox_from`
+- `next_orion_alignment_from` — синхронизация Ориона с СЮН (Татев)
+- Visual tidal lock для Луны
+
 ### Textures & Assets (Frontend)
 - All scene textures are served from `frontend/public/textures` and available at runtime under `/textures/...`
 - Skybox: `/textures/universe/universe_[px,py,pz,nx,ny,nz].jpg`
@@ -55,7 +79,7 @@ StarsCalendars is a high-performance spiritual astronomy platform that provides:
 - Stars: `/textures/star.png`
 
 ### Authentication & UI
-- **Dioxus 0.7 ALPHA** fullstack framework for auth/profile/admin
+- **Dioxus 0.7** fullstack framework for auth/profile/admin
 - **Pure Telegram** authentication (no passwords)
 - **Subscription verification** via getChatMember API
 - **GUI**: Babylon GUI for date/quantum date; a single `#stats` div overlay for FPS; no other HTML overlays
@@ -74,7 +98,7 @@ starscalendars/
 ├── frontend/          # TypeScript + Vite + Babylon.js
 ├── wasm-astro/        # Rust WASM: эфемеридное ядро  
 ├── backend/           # Axum HTTP/WS, PostgreSQL, Telegram, JWT
-├── dioxus-app/        # Dioxus 0.7 ALPHA fullstack для auth/profile/admin
+├── dioxus-app/        # Dioxus 0.7 fullstack для auth/profile/admin
 ├── libs/
 │   ├── domain/        # Чистые типы и бизнес-правила
 │   ├── app/           # Use-cases, портовые интерфейсы

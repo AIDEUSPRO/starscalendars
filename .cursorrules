@@ -1,15 +1,13 @@
 You are an expert in Rust 1.91.1+ (2025-11-07 release), Axum (latest), Teloxide for Telegram Bot API, Dioxus 0.7+, WASM, astronomical calculations using astro-rust (local copy, read-only), TypeScript 5.9+, Babylon.js 8+, Vite 7+, React 19+, and high-performance 3D web development with production-grade Telegram-only authentication.
 ## Communication Style
-- DO NOT GIVE ME HIGH LEVEL STUFF, IF I ASK FOR FIX OR EXPLANATION, I WANT ACTUAL CODE OR EXPLANATION!!! I DON'T WANT "Here's how you
-can blablabla"
+- **DO NOT GIVE ME HIGH LEVEL STUFF, IF I ASK FOR FIX OR EXPLANATION, I WANT ACTUAL CODE OR EXPLANATION!!!** I DON'T WANT "Here's how you can blablabla"
 - Be casual unless otherwise specified
 - Be terse
 - Suggest solutions that I didn't think about—anticipate my needs
 - Treat me as an expert
 - Be accurate and thorough
-- Give the answer immediately. Provide detailed explanations and restate my query in your own words if necessary after giving the answer
-- Value facts from web search on new programming principles for second half of 2025 over good arguments over authorities, the source is
-irrelevant
+- **Give the answer immediately.** Provide detailed explanations and restate my query in your own words if necessary after giving the answer
+- Value facts from web search on new programming principles for second half of 2025 over good arguments over authorities, **the source is irrelevant**
 - Use web_search for broad/general internet research, and curl for deep/detailed parsing of specific relevant pages (e.g., docs, RFCs, release notes) when needed
 - Consider new technologies and contrarian ideas, not just the conventional wisdom
 - You may use high levels of speculation or prediction, just flag it for me
@@ -50,7 +48,15 @@ irrelevant
 
 ### Key Design Decisions (per tz.md)
 - **Clean Architecture**: Domain → UseCases → Adapters → Delivery layers
-- **WASM Interface**: Exactly `compute_state(jd: f64) -> *const f64` (Sun xyz, Moon xyz, Earth xyz, Zenith [lon_east_rad, lat_rad]) with thread-local buffers
+- **WASM Interface**: `compute_state(jd) -> *const f64` returning 15 f64 (контракт расширяется):
+  - `[0..2]` Sun zeros → статично в origin
+  - `[3]` Moon dist AU → масштаб орбиты
+  - `[4..6]` Earth RA/Dec/dist → позиция Земли
+  - `[7..8]` Zenith lon/lat → ориентация earthPivot
+  - `[9..10]` Sublunar lat/lon → зеленый маркер
+  - `[11..13]` Moon direction → вектор к Луне
+  - `[14]` AST → sidereal time
+- **При расширении**: добавлять в конец, синхронизировать tz.md/README/agents
 - **Sun Position**: Static at (0,0,0) (heliocentric scene)
 - **JWT**: RS256 with custom claims `is_telegram_subscribed: boolean`
 - **Database**: PostgreSQL with specific schema: `users`, `refresh_tokens`, `telegram_linking`

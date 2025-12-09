@@ -48,40 +48,43 @@ tasks-guard:
 # 🦀 Строгий Clippy с правилами из anti.md/QUALITY.md/CLAUDE.md
 # ✅ ИСКЛЮЧАЕМ astro-rust из проверок - это сторонняя библиотека (read-only)
 clippy:
-	@echo "🦀 Running strict Clippy checks (excluding astro-rust dependency)..."
-	@if [ "$${SQLX_OFFLINE:-0}" = "1" ]; then echo "⚠️ SQLX_OFFLINE=1 → skipping clippy (sqlx metadata not prepared)"; exit 0; fi
-	@echo "📦 Checking WASM module (only our wrapper code)..."
-	@if [ -f "wasm-astro/Cargo.toml" ]; then \
-		SQLX_OFFLINE=1 cargo clippy --manifest-path=wasm-astro/Cargo.toml --target wasm32-unknown-unknown --all-targets --all-features --no-deps -- \
-			-W clippy::unwrap_used -W clippy::expect_used -W clippy::panic || echo "⚠️ WASM clippy issues found"; \
+	@if [ ! -d "libs/infra/.sqlx" ]; then \
+		echo "⚠️ Skipping clippy (libs/infra .sqlx metadata missing; run 'cargo sqlx prepare' to enable)"; \
 	else \
-		echo "⚠️ WASM module not found at wasm-astro/"; \
-	fi
-	@echo "📦 Checking workspace packages..."
-	@if [ -f "backend/Cargo.toml" ]; then \
-		if [ "$${SQLX_OFFLINE:-0}" = "1" ]; then \
-			echo "⚠️ SQLX_OFFLINE=1 → skipping backend clippy (sqlx metadata not prepared)"; \
+		echo "🦀 Running strict Clippy checks (excluding astro-rust dependency)..."; \
+		echo "📦 Checking WASM module (only our wrapper code)..."; \
+		if [ -f "wasm-astro/Cargo.toml" ]; then \
+			SQLX_OFFLINE=1 cargo clippy --manifest-path=wasm-astro/Cargo.toml --target wasm32-unknown-unknown --all-targets --all-features --no-deps -- \
+				-W clippy::unwrap_used -W clippy::expect_used -W clippy::panic || echo "⚠️ WASM clippy issues found"; \
 		else \
-		SQLX_OFFLINE=1 cargo clippy --manifest-path=backend/Cargo.toml --all-targets --all-features --no-deps -- \
-			-D clippy::unwrap_used -D clippy::expect_used -D clippy::panic -D clippy::as_conversions || echo "⚠️ Backend clippy issues found"; \
-		fi \
-	fi
-	@if [ -d "libs" ]; then \
-		find libs -name "Cargo.toml" | while read cargo_file; do \
-			echo "📦 Checking $$cargo_file..."; \
-			if [ "$${SQLX_OFFLINE:-0}" = "1" ] && echo "$$cargo_file" | grep -q "libs/infra"; then \
-				echo "⚠️ SQLX_OFFLINE=1 → skipping $$cargo_file (sqlx metadata not prepared)"; \
+			echo "⚠️ WASM module not found at wasm-astro/"; \
+		fi; \
+		echo "📦 Checking workspace packages..."; \
+		if [ -f "backend/Cargo.toml" ]; then \
+			if [ ! -d "libs/infra/.sqlx" ]; then \
+				echo "⚠️ Skipping backend clippy (libs/infra .sqlx metadata missing; run 'cargo sqlx prepare' to enable)"; \
 			else \
-				SQLX_OFFLINE=1 cargo clippy --manifest-path="$$cargo_file" --all-targets --all-features --no-deps -- \
-					-D clippy::unwrap_used -D clippy::expect_used -D clippy::panic -D clippy::as_conversions || echo "⚠️ Clippy issues in $$cargo_file"; \
+				SQLX_OFFLINE=1 cargo clippy --manifest-path=backend/Cargo.toml --all-targets --all-features --no-deps -- \
+					-D clippy::unwrap_used -D clippy::expect_used -D clippy::panic -D clippy::as_conversions || echo "⚠️ Backend clippy issues found"; \
 			fi; \
-		done; \
+		fi; \
+		if [ -d "libs" ]; then \
+			find libs -path "libs/infra" -prune -o -name "Cargo.toml" -print | while read cargo_file; do \
+				echo "📦 Checking $$cargo_file..."; \
+				if grep -q "sqlx" "$$cargo_file" && [ ! -d "$$(dirname "$$cargo_file")/.sqlx" ]; then \
+					echo "⚠️ Skipping $$cargo_file (sqlx metadata missing; run 'cargo sqlx prepare' to enable clippy)"; \
+				else \
+					SQLX_OFFLINE=1 cargo clippy --manifest-path="$$cargo_file" --all-targets --all-features --no-deps -- \
+						-D clippy::unwrap_used -D clippy::expect_used -D clippy::panic -D clippy::as_conversions || echo "⚠️ Clippy issues in $$cargo_file"; \
+				fi; \
+			done; \
+		fi; \
+		if [ -f "dioxus-app/Cargo.toml" ]; then \
+			SQLX_OFFLINE=1 cargo clippy --manifest-path=dioxus-app/Cargo.toml --all-targets --all-features --no-deps -- \
+				-D clippy::unwrap_used -D clippy::expect_used -D clippy::panic -D clippy::as_conversions || echo "⚠️ Dioxus clippy issues found"; \
+		fi; \
+		echo "✅ Clippy checks completed for our packages only (astro-rust excluded)"; \
 	fi
-	@if [ -f "dioxus-app/Cargo.toml" ]; then \
-		SQLX_OFFLINE=1 cargo clippy --manifest-path=dioxus-app/Cargo.toml --all-targets --all-features --no-deps -- \
-			-D clippy::unwrap_used -D clippy::expect_used -D clippy::panic -D clippy::as_conversions || echo "⚠️ Dioxus clippy issues found"; \
-	fi
-	@echo "✅ Clippy checks completed for our packages only (astro-rust excluded)"
 
 # 🎯 WASM производительность и безопасность (enhanced for 2025)
 wasm-perf:

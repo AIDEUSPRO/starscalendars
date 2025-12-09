@@ -1,5 +1,34 @@
 # Tasks List (high-level, newcomer-complete)
 
+## 🔧 КАК СОЗДАТЬ WASM ОБЕРТКУ С НУЛЯ
+
+### Цель
+Обертка предоставляет астрономические данные для 3D сцены через единый `compute_state(jd)`.
+
+### Алгоритм создания
+1. **Изучить astro-rust API** в `./astro-rust/src/`: sun, lunar, planet, nutation, precess, time, ecliptic, coords
+2. **Создать thread-local буфер** `[f64; N]` для zero-copy
+3. **Вычислить общие величины один раз**: nutation, obliquity, AST
+4. **Заполнить буфер** используя ТОЛЬКО astro-rust функции
+5. **Вернуть указатель** `out.as_ptr()` — JS создает Float64Array view
+
+### Текущий STATE layout (15 f64)
+| Slots | Данные | Назначение для сцены |
+|-------|--------|---------------------|
+| [0..2] | Sun zeros | Солнце статично в (0,0,0) |
+| [3] | Moon dist AU | Масштабирование орбиты Луны |
+| [4..6] | Earth RA/Dec/dist | Позиция Земли вокруг Солнца |
+| [7..8] | Zenith lon/lat | Ориентация earthPivot |
+| [9..10] | Sublunar lat/lon | Зеленый маркер на Земле |
+| [11..13] | Moon direction | Единичный вектор Земля→Луна |
+| [14] | AST | Apparent sidereal time |
+
+### При расширении
+- Добавлять в конец, не менять существующие индексы
+- Синхронизировать: tz.md, README.md, CLAUDE.md, .cursorrules, init.ts, BabylonScene.tsx, agents
+
+---
+
 - [ ] A. WASM astro core (state=15, zero-copy, one call per frame)
   - [x] STATE layout 15 f64: Sun zeros[0..2], Moon dist AU[3], Earth RA/Dec/dist AU[4..6], Solar zenith lon/lat[7..8], sublunar lat/lon[9..10], Earth-local Moon unit vector[11..13], AST rad[14]
   - [x] Thread-local buffer, zero-copy Float64Array view

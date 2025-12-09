@@ -11,16 +11,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 You are an expert in Rust 1.91.1+ (2025-11-07 release), Axum (latest), Teloxide for Telegram Bot API, Dioxus 0.7+, WASM, astronomical calculations using astro-rust (local copy, read-only), TypeScript 5.9+, Babylon.js 8+, Vite 7+, React 19+, and high-performance 3D web development with production-grade Telegram-only authentication.
 
 ## Communication Style
-- DO NOT GIVE ME HIGH LEVEL STUFF, IF I ASK FOR FIX OR EXPLANATION, I WANT ACTUAL CODE OR EXPLANATION!!! I DON'T WANT "Here's how you 
-can blablabla"
+- **DO NOT GIVE ME HIGH LEVEL STUFF, IF I ASK FOR FIX OR EXPLANATION, I WANT ACTUAL CODE OR EXPLANATION!!!** I DON'T WANT "Here's how you can blablabla"
 - Be casual unless otherwise specified
 - Be terse
 - Suggest solutions that I didn't think about—anticipate my needs
 - Treat me as an expert
 - Be accurate and thorough
-- Give the answer immediately. Provide detailed explanations and restate my query in your own words if necessary after giving the answer
-- Value facts from web search on new programming principles for second half of 2025 over good arguments over authorities, the source is 
-irrelevant
+- **Give the answer immediately.** Provide detailed explanations and restate my query in your own words if necessary after giving the answer
+- Value facts from web search on new programming principles for second half of 2025 over good arguments over authorities, **the source is irrelevant**
 - Use web_search for broad/general internet research, and curl for deep/detailed parsing of specific relevant pages (e.g., docs, RFCs, release notes) when needed
 - Consider new technologies and contrarian ideas, not just the conventional wisdom
 - You may use high levels of speculation or prediction, just flag it for me
@@ -78,10 +76,12 @@ irrelevant
 ### Implemented Components
 - **Frontend**: React 19 + Babylon.js 8 + TypeScript 5.9 with Vite 7 (needs TypeScript config fixes)
 - **Backend**: Axum server with clean architecture layers implemented (needs SQLX database setup)  
-- **WASM Module**: ✅ ПОЛНОСТЬЮ РАБОТАЕТ — полный набор оберток соответствует astro-rust; горячий путь — единый `compute_state(jd)` (включая солнечный зенит для поворота Земли)
-  - Новое: сцена использует единый вектор на Луну, полученный из RA/Dec+AST; сублунарная точка и позиция Луны совпадают.
-  - Next: расширить `compute_state(jd)` и вернуть в STATE: `lunar_ra_rad`, `lunar_dec_rad`, `apparent_sidereal_time_rad`, `sublunar_lon_east_rad`, `sublunar_lat_rad`, а также Earth‑local единичный вектор направления на Луну — убрать тригонометрию из TS и подготовить визуальный tidal lock (одна сторона Луны к Земле)
-  - Новое (зафиксировано): модуль `timescales` для UTC↔TT по формуле (TT−UTC)=(TAI−UTC)+32.184s с WASM‑override; точный поиск зимнего солнцестояния через λ_app(t)=270° (FK5 + аберрация + нутация, TT→UTC через timescales); перенос NT (Quantum Time) в WASM функцией `get_quantum_time_components(ms, tzMin)`; обновление NT в UI раз в минуту
+- **WASM Module**: ✅ ПОЛНОСТЬЮ РАБОТАЕТ — `compute_state(jd)` возвращает 15 f64:
+  - Sun zeros [0..2], Moon dist [3], Earth RA/Dec/dist [4..6], Zenith [7..8], Sublunar [9..10], Moon direction [11..13], AST [14]
+  - Сцена использует единый вектор на Луну из STATE; тригонометрия убрана из TS
+  - `timescales` модуль: UTC↔TT (TAI−UTC+32.184s)
+  - `next_winter_solstice_from` — Newton solver λ_app=270°
+  - `get_quantum_time_components` — Quantum Time в WASM
 - **Domain/App/Infra Libraries**: Clean architecture implementation (some import issues)
 - **Dioxus App**: Authentication and profile management (configured)
 - **Quality System**: Comprehensive Makefile and quality rules (fully working)
@@ -204,9 +204,24 @@ pnpm -w run dev:frontend-only
 
 ### Key Design Decisions (per tz.md)
 - **Clean Architecture**: Domain → UseCases → Adapters → Delivery layers
-- **WASM Interface**: Exactly `compute_state(jd: f64) -> *const f64` (11 f64: Sun zeros [0..2], Moon xyz [3..5], Earth xyz [6..8], Zenith [lon_east_rad, lat_rad] [9..10]); thread-local buffers
+- **WASM Interface**: `compute_state(jd) -> *const f64` returning 15 f64 (**контракт расширяется**):
+
+| Slots | Данные | Назначение для сцены |
+|-------|--------|---------------------|
+| [0..2] | Sun zeros | Солнце статично в (0,0,0) |
+| [3] | Moon dist AU | Масштабирование орбиты Луны |
+| [4..6] | Earth RA/Dec/dist | Позиция Земли вокруг Солнца |
+| [7..8] | Zenith lon/lat | Ориентация earthPivot |
+| [9..10] | Sublunar lat/lon | Зеленый маркер на Земле |
+| [11..13] | Moon direction | Единичный вектор Земля→Луна |
+| [14] | AST | Apparent sidereal time |
+
+- **⚠️ При расширении контракта**:
+  - Добавлять новые слоты в конец буфера
+  - НЕ менять индексы существующих
+  - Синхронизировать: tz.md, README.md, .cursorrules, init.ts, BabylonScene.tsx, agents
 - **Sun Position**: Static at (0,0,0) (heliocentric scene)  
-- Hot path optimization: Sun slots are zeros in STATE to avoid redundant computation. The frontend treats Sun as fixed at the origin and never updates its transform after initialization. Zenith is still computed precisely. For event timing use `next_winter_solstice_from(jd_utc_start)` off-frame and cache results.
+- Hot path: один `compute_state` на кадр; Sun не вычисляется; zenith included. Off-frame: `next_winter_solstice_from` + cache.
 - **JWT**: RS256 with custom claims `is_telegram_subscribed: boolean`
 - **Database**: PostgreSQL with specific schema: `users`, `refresh_tokens`, `telegram_linking`
 - **Authentication**: Pure Telegram-only, no traditional passwords
@@ -608,6 +623,13 @@ cargo test --release -- --ignored bench_
 - Feature flags для browser/Node.js
 - Exactly one `compute_state(t)` call per frame
 - No string passing between WASM-JS
+- **Алгоритм создания обертки с нуля**: см. секцию "ДЕТАЛЬНЫЙ АЛГОРИТМ РЕАЛИЗАЦИИ WASM ОБЕРТКИ" в tz.md
+
+### **Off-frame Functions (планируемые расширения):**
+- `next_summer_solstice_from(jd)` — летнее солнцестояние
+- `next_vernal_equinox_from(jd)` — весеннее равноденствие
+- `next_autumnal_equinox_from(jd)` — осеннее равноденствие
+- `next_orion_alignment_from(jd, lat, lon)` — синхронизация Ориона с СЮН (Татев)
 
 ### **Database Requirements:**
 - PostgreSQL schema exactly per tz.md

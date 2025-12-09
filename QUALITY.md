@@ -80,6 +80,17 @@ impl UserRepository for PostgresUserRepository {
 - **Pattern**: Thread-local buffers with Float64Array view (zero-copy)
 - **Enforcement**: Automatic blocking of multiple WASM calls
 
+**STATE Buffer Contract (15 f64):**
+```
+[0..2]   Sun xyz        = zeros (static origin)
+[3]      Moon distance  = geocentric AU
+[4..6]   Earth RA/Dec/dist = heliocentric radians/AU
+[7..8]   Zenith lon/lat = solar zenith (east+/north+, rad)
+[9..10]  Sublunar lat/lon = Moon zenith (rad)
+[11..13] Moon direction = Earth-local unit vector
+[14]     AST            = apparent sidereal time (rad)
+```
+
 ### **Backend API Response Times**
 - **Target**: <100ms per API request
 - **Database**: O(1) indexed queries only, no N+1 patterns
