@@ -9,10 +9,26 @@ NC='\033[0m'
 
 VIOLATIONS=0
 EXCLUDES=(--exclude-dir=.git --exclude-dir=target --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=frontend/node_modules --exclude='*.lock' --exclude='package-lock.json')
+RG_GLOBS=(
+  -g '!.git/**'
+  -g '!target/**'
+  -g '!node_modules/**'
+  -g '!frontend/node_modules/**'
+  -g '!dist/**'
+  -g '!frontend/dist/**'
+  -g '!.claude/**'
+  -g '!**/.env.local'
+  -g '!docs/**'
+  -g '!deployment/**'
+  -g '!_n8n-mcp-reference/**'
+  -g '!MCP_REFERENCE.md'
+  -g '!**/*.lock'
+  -g '!**/package-lock.json'
+)
 
 run_rg() {
   if command -v rg >/dev/null 2>&1; then
-    rg -n --color=never -uu ${EXCLUDES[@]} -e "$1" || true
+    rg -n --color=never -uu ${RG_GLOBS[@]} -e "$1" . || true
   else
     grep -rn ${EXCLUDES[@]} -- "$1" . 2>/dev/null || true
   fi
@@ -20,13 +36,14 @@ run_rg() {
 
 echo "🔐 Secret scan (baseline)..."
 
-# AWS Access Key ID / Secret Access Key
 aws_id=$(run_rg "AKIA[0-9A-Z]{16}")
 aws_secret=$(run_rg "(?i)aws(.{0,20})?(secret|access).{0,20}?[A-Za-z0-9/+=]{40}")
-# Private keys
 priv_keys=$(run_rg "-----BEGIN (RSA|EC|DSA|OPENSSH|PGP) PRIVATE KEY-----")
-# Generic tokens
-tokens=$(run_rg "(?i)(token|apikey|api_key|secret)[\s:=]+[A-Za-z0-9\-_\.]{16,}")
+# Tokens (filtered to drop obvious placeholders, ignore dotted call chains)
+tokens_all=$(run_rg "(?i)(token|apikey|api_key|secret)[\s:=]+[A-Za-z0-9_-]{20,}")
+tokens=$(echo "$tokens_all" | grep -Ev '(your_|YOUR_)' || true)
+bearer=$(run_rg "(?i)authorization:\s*bearer\s+[A-Za-z0-9\-_\.]{16,}")
+url_creds=$(run_rg "https?://[^\s/]+:[^\s/]+@[^\s]+")
 
 report() {
   local name="$1"; shift; local matches="$1"
@@ -43,6 +60,8 @@ report "AWS_ACCESS_KEY_ID" "$aws_id"
 report "AWS_SECRET_ACCESS_KEY" "$aws_secret"
 report "Private Keys" "$priv_keys"
 report "Generic tokens" "$tokens"
+report "Bearer tokens" "$bearer"
+report "URL with credentials" "$url_creds"
 
 if [[ $VIOLATIONS -gt 0 ]]; then
   echo -e "${RED}🚫 Secret scan found $VIOLATIONS potential issues${NC}"

@@ -16,11 +16,9 @@ fi
 # 2) tasks_checked.md must contain latest Completed marker for last finished task
 grep -q '— Completed' tasks_checked.md || echo "⚠️ tasks_checked.md: no '— Completed' marker (informational)"
 
-
 # 4) Foundation basic checks marked done
 grep -q '\[x\].*OpenAPI (utoipa) для core и ko' tasks-list.md || echo "⚠️ tasks-list.md: foundation OpenAPI not marked [x]"
 grep -q '\[x\].*security headers' tasks-list.md || echo "⚠️ tasks-list.md: foundation security headers not marked [x]"
 
 echo "✅ tasks-guard: OK"
-
 

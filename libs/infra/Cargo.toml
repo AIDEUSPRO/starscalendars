@@ -24,6 +24,8 @@ teloxide = { workspace = true }
 # JWT and security
 jsonwebtoken = { workspace = true }
 argon2 = { workspace = true }
+rsa = { workspace = true, features = ["pem"] }
+rand = { workspace = true }
 
 # Async and error handling
 tokio = { workspace = true }

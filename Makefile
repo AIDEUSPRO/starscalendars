@@ -1,14 +1,17 @@
 # StarsCalendars Quality-First Makefile
 
-.PHONY: quality-check anti-patterns wasm-critical wasm-perf clippy security arch perf clean setup monitor quality-report quality-summary find-patterns security-audit test bench docs check ci
+.PHONY: quality-check anti-patterns wasm-critical wasm-perf clippy security arch perf clean setup monitor quality-report quality-summary find-patterns security-audit test bench docs check ci versions-guard manifest-guard tasks-guard secret-scan unwrap-or-patterns production-patterns error-handling-patterns
 
 # 🛡️ Главная проверка качества (enhanced with WASM critical checks)
-quality-check: anti-patterns wasm-critical clippy security arch
+quality-check: anti-patterns wasm-critical clippy security arch secret-scan tasks-guard versions-guard manifest-guard
 	@echo "✅ All quality checks passed!"
 
 # 🔍 Проверка антипаттернов (with enhanced test code exclusion)
 anti-patterns:
 	@EXCLUDE_DIRS="--exclude-dir=astro-rust" ./scripts/anti-patterns.sh || true
+
+secret-scan:
+	@./scripts/secret-scan.sh
 
 # 📋 unwrap_or антипаттерны (канон в anti.md)
 unwrap-or-patterns:
@@ -29,6 +32,18 @@ error-handling-patterns:
 	@! (grep -r "fn.*-> Result" --include="*.rs" --exclude-dir=target --exclude-dir=astro-rust . | head -5 | xargs -I {} sh -c 'file="{}"; grep -q "unwrap\|expect" "$${file%:*}" && echo "❌ Found unwrap/expect in Result function: $${file%:*}"' ) || exit 1
 	@grep -q "thiserror\|anyhow" Cargo.toml || echo "⚠️  Consider using thiserror/anyhow for structured error handling"
 	@echo "✅ Error handling patterns validated"
+
+versions-guard:
+	@echo "🔎 Versions guard"
+	@python3 ./scripts/versions-guard.py
+
+manifest-guard:
+	@echo "📦 Manifest guard"
+	@bash ./scripts/manifest-guard.sh
+
+tasks-guard:
+	@echo "🗂️  Tasks guard"
+	@bash ./scripts/tasks-guard.sh
 
 # 🦀 Строгий Clippy с правилами из anti.md/QUALITY.md/CLAUDE.md
 # ✅ ИСКЛЮЧАЕМ astro-rust из проверок - это сторонняя библиотека (read-only)

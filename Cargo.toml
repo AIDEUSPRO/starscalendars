@@ -51,6 +51,10 @@ js-sys = "0.3"
 web-sys = "0.3"
 wasm-bindgen-futures = "0.4"
 
+# Cryptography and RNG
+rsa = { version = "0.10", features = ["pem"] }
+rand = "0.8"
+
 # Dioxus fullstack (2025 alpha version)
 dioxus = { version = "0.7.0-alpha.3", features = ["router", "fullstack"] }
 dioxus-web = "0.7.0-alpha.3"

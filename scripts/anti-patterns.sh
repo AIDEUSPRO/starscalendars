@@ -158,14 +158,13 @@ echo "🚨 Checking core anti-patterns..."
 
 scan_pattern "HashMap::new()" "HashMap initialization without capacity" "Use HashMap::with_capacity(n) for pre-allocation" "false"
 scan_pattern "panic!(" "panic! usage" "Use Result<T, E> with custom error types" "true"
-scan_pattern "\.unwrap()" "unwrap() usage" "Use Result<T, E> with proper error handling" "true"
-scan_pattern "\.unwrap_u8\(" "unwrap_u8 usage" "Use explicit checks or safe conversions (avoid unwrap_*)" "true"
-scan_pattern "\.unwrap_unchecked\(" "unwrap_unchecked usage" "Never use unchecked unwraps; use typed errors or invariants" "true"
-scan_pattern "\.unwrap_err\(" "unwrap_err usage" "Avoid unwrap_err; pattern-match Result explicitly" "true"
+# Absolute ban: any unwrap* (includes unwrap_or*/default/else, unwrap_unchecked, unwrap_err, custom variants). No test exceptions.
+scan_pattern "\\.unwrap[[:alnum:]_]*\\(" "unwrap* usage" "Use explicit match/if let/let-else or propagate with ? (no unwrap*)" "false"
+# Absolute ban: any expect* (includes expect_unwrap variants). No test exceptions.
+scan_pattern "\\.expect[[:alnum:]_]*\\(" "expect* usage" "Use explicit match/if let/let-else or propagate with ? (no expect*)" "false"
 scan_pattern "unreachable!(" "unreachable! usage" "Use Result<T, E> with proper error handling" "true"
 scan_pattern "unimplemented!(" "unimplemented! usage" "Implement the function or use todo!() during development" "true"
 scan_pattern "BTreeMap::new()" "BTreeMap initialization without capacity" "Use BTreeMap::new() with proper sizing consideration" "false"
-scan_pattern "\.expect(" "expect() usage" "Use Result<T, E> with custom error types" "true"
 scan_pattern "todo!(" "todo! usage" "Complete implementation before production" "true"
 scan_pattern "HashSet::new()" "HashSet initialization without capacity" "Use HashSet::with_capacity(n) for pre-allocation" "false"
 scan_pattern "Vec::new()" "Vec initialization without capacity" "Use Vec::with_capacity(n) for pre-allocation" "false"
@@ -173,7 +172,7 @@ scan_pattern "eval(" "eval() function usage" "🚨 CRITICAL SECURITY VULNERABILI
 
 echo "📋 Summary of scan results:"
 echo "  - Test code exclusions applied per CLAUDE.md"
-echo "  - .expect() is acceptable in #[cfg(test)] modules"
+echo "  - unwrap*/expect* are banned everywhere (tests included)"
 echo "  - Production code must use proper error handling"
 
 echo ""
@@ -181,43 +180,7 @@ echo "🦀 Rust 1.91.1+ specific pattern validation..."
 
 # Enhanced anti.md patterns (2025-01-08)
 echo "🔍 Checking enhanced anti.md patterns..."
-
-# unwrap_or with eager evaluation (improved regex to avoid false positives)
-echo "🔍 Scanning for unwrap_or eager evaluation anti-pattern..."
-# Look for unwrap_or( followed by function calls like func(), build_something(), etc.
-eager_unwrap_or=$(search_content "\\.unwrap_or\([^)\n]*[a-zA-Z_]\w*\s*\(" . | sed 's/^/  - /' || true)
-if [[ -n "$eager_unwrap_or" ]]; then
-    echo -e "${RED}❌ CRITICAL: Found unwrap_or() with potential eager evaluation${NC}"
-    echo -e "${YELLOW}📝 Suggestion: Use unwrap_or_else(|| expensive_operation()) for lazy evaluation${NC}"
-    echo "📍 Locations:"
-    echo "$eager_unwrap_or"
-    ((VIOLATIONS++))
-else
-    echo "✅ No unwrap_or eager evaluation violations found"
-fi
-
-# map_or eager default (Option::map_or)
-eager_map_or=$(search_content "\\.map_or\([,)]*[^,)]*[a-zA-Z_]\w*\s*\(" . | sed 's/^/  - /' || true)
-if [[ -n "$eager_map_or" ]]; then
-    echo -e "${RED}❌ map_or() eager default detected${NC}"
-    echo -e "${YELLOW}📝 Suggestion: Use map_or_else(|| default, |v| f(v))${NC}"
-    echo "$eager_map_or"
-    ((VIOLATIONS++))
-else
-    echo "✅ No map_or eager default patterns"
-fi
-
-# ok_or eager default (prefer ok_or_else)
-eager_ok_or=$(search_content "\\.ok_or\([^)\n]*[a-zA-Z_]\w*\s*\(" . | sed 's/^/  - /' || true)
-if [[ -n "$eager_ok_or" ]]; then
-    echo -e "${RED}❌ ok_or() eager error construction detected${NC}"
-    echo -e "${YELLOW}📝 Suggestion: Use ok_or_else(|| error())${NC}"
-    echo "$eager_ok_or"
-    ((VIOLATIONS++))
-else
-    echo "✅ No ok_or eager error patterns"
-fi
-
+# (unwrap*/expect* absolute ban already enforced above)
 # Missing error documentation in Result functions
 echo "🔍 Checking for missing error documentation..."
 result_functions=$(search_content "fn.*-> *Result" .)

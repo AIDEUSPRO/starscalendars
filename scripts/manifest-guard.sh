@@ -19,13 +19,13 @@ while IFS= read -r -d '' f; do
   fi
 done < <(find . -name Cargo.toml -print0)
 
-# 2.5) Forbid legacy crate path in workspace members
+# 2.5) Forbid legacy crate path in workspace members (kept from reference; harmless if absent)
 if grep -q 'mpcrag-service' Cargo.toml; then
   echo "❌ mpcrag-service must be removed from workspace members (legacy)" >&2
   fail=1
 fi
 
-# 3) Workspace pin policy: majors only (0.x -> minor) for our top deps
+# 3) Workspace pin policy: majors only (0.x -> minor) for core deps
 root="./Cargo.toml"
 if [ -f "$root" ]; then
   if ! grep -qE '^axum\s*=\s*"0\.8"(\s|$)' "$root"; then
@@ -33,8 +33,8 @@ if [ -f "$root" ]; then
       echo "❌ axum must be pinned to \"0.8\" in workspace" >&2; fail=1;
     fi
   fi
-  if ! grep -q '^tokio\s*=\s*{[^}]*version\s*=\s*"1"' "$root"; then echo "❌ tokio must be pinned to \"1\" in workspace" >&2; fail=1; fi
-  if ! grep -q '^tracing\s*=\s*"0\.1"' "$root"; then echo "❌ tracing must be pinned to \"0.1\" in workspace" >&2; fail=1; fi
+  if ! grep -q '^tokio\s*=\s*{[^}]*version\s*=\s*"1"' "$root"; then echo "❌ tokio must be pinned to \"1\"" >&2; fail=1; fi
+  if ! grep -q '^tracing\s*=\s*"0\.1"' "$root"; then echo "❌ tracing must be pinned to \"0.1\"" >&2; fail=1; fi
   if ! grep -q '^tracing-subscriber\s*=\s*{[^}]*version\s*=\s*"0\.3"' "$root"; then echo "❌ tracing-subscriber must be pinned to \"0.3\"" >&2; fail=1; fi
   if ! grep -q '^thiserror\s*=\s*"2"' "$root"; then echo "❌ thiserror must be pinned to \"2\"" >&2; fail=1; fi
   if ! grep -q '^serde\s*=\s*{[^}]*version\s*=\s*"1"' "$root"; then echo "❌ serde must be pinned to \"1\"" >&2; fail=1; fi
@@ -45,3 +45,4 @@ if [ -f "$root" ]; then
 fi
 
 exit $fail
+

@@ -43,12 +43,10 @@
 Based on official Result enum documentation:
 
 - **`unwrap()`, `expect()`, `panic!()`** — "Generally discouraged" per stdlib docs, kills availability
-- **`unwrap_or(..)` / `unwrap_or_else(..)`** — eager default evaluation masks failures
+- **`unwrap_or(..)` / `unwrap_or_else(..)` / `unwrap_or_default()`** — eager or silent default evaluation masks failures
 - **Custom unwrap variants** — `unwrap_u64`, `unwrap_str`, etc. - explicit type checking required
 - **Error suppression** — Ignoring `Result`/`Option` without explicit handling violates Rust principles
 - **Panic in libraries** — "Panics are meant for unrecoverable errors" - forces termination on users
-
-🔁 **Allowed narrow case**: `unwrap_or_default()` is acceptable *only* for trivially safe, zero-cost defaults (string, numeric, bool) where the success arm is identity and no side effects occur—matching repo policy. Everything else uses `match`/`if let`.
 
 ### ✅ MANDATORY PATTERNS (Per Official Documentation)
 
@@ -117,12 +115,15 @@ let v = opt.map_or(fallback, |v| v);
 
 - unwrap_or_default() — **only** for trivial zero-cost defaults:
 ```rust
-// ✅ Allowed (string/number/bool, identity success arm, no side effects)
-let name: String = maybe_name.unwrap_or_default();
-// ❌ Use match if fallback allocates/does business logic
+// ❌ unwrap_or_default() is forbidden (masks error paths)
+// ✅ Use explicit control flow with Default::default()
+let value = match maybe_value {
+    Some(v) => v,
+    None => Default::default(),
+};
 let cfg = match fetch_cfg() {
     Ok(v) => v,
-    Err(_) => build_cfg(), // fallback does work, so no unwrap_or_default
+    Err(_) => Default::default(), // or propagate with ?
 };
 ```
 
