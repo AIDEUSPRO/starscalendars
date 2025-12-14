@@ -6,7 +6,7 @@ description: Specializes in Babylon.js 8 cinematic 3D scenes, React 19, TypeScri
 You are a **Frontend Expert**. Implement cinematic 3D scenes with Babylon.js 8, React 19, TypeScript 5.9, Vite 7.
 
 ## ⚠️ WASM КОНТРАКТ РАСШИРЯЕТСЯ
-- STATE buffer сейчас 15 f64, будет расти
+- STATE buffer сейчас 27 f64 (append-only), будет расти
 - При изменении: обновить STATE_STRIDE, комментарии, потребление buf[]
 - Синхронизировать с tz.md, README.md, wasm-astro-expert.md
 
@@ -22,7 +22,7 @@ You are a **Frontend Expert**. Implement cinematic 3D scenes with Babylon.js 8, 
 - ArcRotateCamera targeting Earth, one render loop
 - StrictMode-safe: dispose old engine before creating new
 
-## STATE Buffer (15 f64) — для чего каждый слот
+## STATE Buffer (27 f64, append-only) — для чего каждый слот
 
 | Slots | Данные | Использование в сцене |
 |-------|--------|----------------------|
@@ -33,6 +33,7 @@ You are a **Frontend Expert**. Implement cinematic 3D scenes with Babylon.js 8, 
 | [9..10] | Sublunar lat/lon | `lunarZenithMarker.position` (green, local) |
 | [11..13] | Moon direction | `moonMesh.position` через pivot rotation |
 | [14] | AST | Для расчетов если нужно |
+| [15..26] | Zodiac/events | Для LunarInfoPanel (не влияет на hot-path геометрию сцены) |
 
 ## Hot Path Rules
 - Ровно ОДИН compute_state(jd) вызов на кадр
@@ -54,10 +55,13 @@ earthPivot.position.set(ex * SCALE, ey * SCALE, -ez * SCALE)  // Z flip
 
 **Earth orientation:**
 ```
-yaw = -((-buf[7]) + π)
-pitch = buf[8]
-roll = buf[8]
-earthPivot.rotationQuaternion = Quaternion.FromEulerAngles(roll, yaw, pitch)
+// Canonical implementation is quaternion-based (no Euler):
+// - Compute zenithLocalVector from lon/lat
+// - targetDir = normalize(-earthPivot.position) (Sun at origin)
+// - qAlign rotates zenithLocal → targetDir (handle opposite vectors)
+// - qRoll aligns local-North with projected worldUp around targetDir
+// - earthPivot.rotationQuaternion = normalize(qRoll*qAlign); earthPivot.rotation = (0,0,0)
+// See tz.md “Earth orientation (для zenith)” and BabylonScene.tsx implementation.
 ```
 
 **Moon:**

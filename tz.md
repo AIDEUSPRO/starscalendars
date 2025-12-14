@@ -14,7 +14,12 @@
 - **🌟 СОЛНЕЧНЫЙ ЗЕНИТ**: Возвращается в составе буфера `compute_state()` (lon_east_rad, lat_rad)
  - **🔒 КАНОН**: Маркер зенита на Земле вычисляется ТОЛЬКО из этих радиан без дополнительных поправок. Схема:
    - Сфера (локально к Земле): `phi=(π/2)-lat_rad`, `theta=(-lon_east_rad)+π`
-   - Поворот пивота: `pivot.y = -((-lon_east_rad)+π)`, `pivot.z = lat_rad`, `pivot.x = lat_rad`
+   - Ориентация пивота: **quaternion-based** (канон текущей реализации в `frontend/src/scene/BabylonScene.tsx`), чтобы избежать проблем Эйлера/сшивки текстуры:
+     - `zenithLocalVector` из `(phi,theta)`
+     - `targetDirVector = normalize(SunWorldPos - EarthWorldPos)` (Sun в (0,0,0) ⇒ `-EarthWorldPos`)
+     - `q_align`: поворот `zenithLocalVector → targetDirVector` (включая обработку противоположных векторов)
+     - `q_roll`: корректировка вокруг `targetDirVector` для “интуитивного наклона” (совмещение local-North с проекцией `worldUp`)
+     - `earthPivot.rotationQuaternion = normalize(q_roll * q_align)` и `earthPivot.rotation=(0,0,0)`
    - Меш Земли не вращается; Луна/орбита следуют пивоту
    - Единичный RH→LH Z‑flip применяется только к мировым позициям тел, не к маркеру
 - **🔥 СТРОГИЙ ЗАПРЕТ**: Любые mock-данные, отсебятина или кастомные формулы АБСОЛЮТНО ЗАПРЕЩЕНЫ
@@ -32,6 +37,25 @@
 - **Луна** видимо вращается вокруг Земли по своей орбите (ELP-2000/82 геоцентрические координаты + смещение к Земле)
   - На сцене позиция Луны и сублунарный маркер вычисляются из единого астрономического источника: RA/Dec Луны + видимое сидерическое время (AST). Это устраняет долговременный сдвиг долготы; широта/долгота совпадают с внешними источниками
 - **Камера** (ArcRotateCamera) по умолчанию смотрит на Землю для лучшего обзора системы
+- **Камера: пресеты Earth↔Moon (КАНОН, реализовано в `frontend/src/scene/BabylonScene.tsx`)**
+  - **Earth preset** (на старте сцены и на кнопке `🌍`):
+    - Позиция камеры ставится “над поверхностью Земли” из приближённой точки пользователя:
+      - `tzOffsetMin = Date().getTimezoneOffset()` (west-positive)
+      - `userLonDeg = -tzOffsetMin/4` (15°/час)
+      - `userLatDeg = 45` (плейсхолдер сейчас; позже заменим на реальную геолокацию)
+      - `localPoint = latLonToLocalXYZ(userLatDeg, userLonDeg, earthRadiusLocal)`
+      - `cameraPos = (earthWorldPos + localPoint) + normalize(localPoint)*offset`
+    - **Обязательный two-phase apply** для ArcRotateCamera (иначе Babylon пересчитывает alpha/beta/radius так, что после переключений камера “уезжает”):
+      - Phase 1: `detachControl(); lockedTarget=null; setTarget(earthWorldPos); setPosition(cameraPos); scene.render()`
+      - Phase 2: `lockedTarget=earthMesh; attachControl(canvas,true); scene.render()`
+    - Перед установкой обязательно **сбросить лимиты** alpha/beta/radius (в Moon режиме они были зафиксированы).
+  - **Moon preset** (кнопка `🌙`):
+    - Камера должна находиться в точке **центра Земли** (world позиция `earthPivot.position`) и смотреть на Луну.
+    - Использовать **мировые координаты**: `moonWorldPos = moonMesh.getAbsolutePosition()`.
+    - **Two-phase apply**:
+      - Phase 1: `detachControl(); lockedTarget=null; setTarget(moonWorldPos); setPosition(earthWorldPos); scene.render()`
+      - Phase 2: `lockedTarget=moonMesh; attachControl(canvas,true); scene.render()`
+    - Затем **зафиксировать вращение** (alpha/beta = текущие значения) и оставить только zoom (radius limits derived from current radius).
 - **Масштабирование**: 700 ед/1 AU (как в референсной сцене) для орбитальной сцены. Размеры тел (DIAMETER семантика для Babylon mesh): Earth=50, Moon=20, Sun=40. ENV_H=2 для оболочки облаков.
 
 ## 🎬 ДЕТАЛЬНЫЙ АЛГОРИТМ РЕАЛИЗАЦИИ 3D СЦЕНЫ (с нуля)
@@ -68,7 +92,7 @@ Scene
 **Один раз на кадр:**
 ```typescript
 const ptr = wasm.compute_state(jd);
-const buf = new Float64Array(memory.buffer, ptr, 15);
+const buf = new Float64Array(memory.buffer, ptr, 27);
 ```
 
 **Earth position:**
@@ -92,13 +116,49 @@ earthPivot.position.set(ex * SCALE, ey * SCALE, -ez * SCALE);
 ```typescript
 const zenithLon = buf[7];  // east+, radians
 const zenithLat = buf[8];  // north+, radians
-
-// Euler → Quaternion: pivot.y, pivot.z, pivot.x
-const yaw = -((-zenithLon) + Math.PI);
-const pitch = zenithLat;
-const roll = zenithLat;
-
-earthPivot.rotationQuaternion = Quaternion.FromEulerAngles(roll, yaw, pitch);
+// Canonical quaternion-based orientation (as implemented in BabylonScene.tsx):
+// 1) Earth-local zenith direction from lon/lat (no extra conversions)
+const phi = (Math.PI / 2) - zenithLat;
+const theta = (-zenithLon) + Math.PI;
+const zenithLocal = new Vector3(
+  Math.sin(phi) * Math.cos(theta),
+  Math.cos(phi),
+  Math.sin(phi) * Math.sin(theta)
+).normalize();
+// 2) World direction from Earth to Sun (Sun is at origin)
+const targetDir = earthPivot.position.clone().scaleInPlace(-1).normalize();
+// 3) q_align rotates zenithLocal → targetDir (handle parallel/opposite)
+const d = Vector3.Dot(zenithLocal, targetDir);
+let qAlign = new Quaternion(0, 0, 0, 1);
+if (d < -0.999999) {
+  // Opposite: pick an arbitrary axis not collinear with zenithLocal
+  const axis0 = Math.abs(zenithLocal.x) < Math.abs(zenithLocal.y)
+    ? (Math.abs(zenithLocal.x) < Math.abs(zenithLocal.z) ? Vector3.Right() : Vector3.Forward())
+    : (Math.abs(zenithLocal.y) < Math.abs(zenithLocal.z) ? Vector3.Up() : Vector3.Forward());
+  const axis = Vector3.Cross(zenithLocal, axis0).normalize();
+  qAlign = Quaternion.RotationAxis(axis, Math.PI);
+} else if (d > 0.999999) {
+  qAlign = new Quaternion(0, 0, 0, 1);
+} else {
+  const axis = Vector3.Cross(zenithLocal, targetDir).normalize();
+  const angle = Math.acos(Math.min(1, Math.max(-1, d)));
+  qAlign = Quaternion.RotationAxis(axis, angle);
+}
+// 4) q_roll: keep “local North” aligned with projected worldUp, around targetDir
+// local north tangent at (phi,theta): eNorthLocal = [-cos(phi)cos(theta), sin(phi), -cos(phi)sin(theta)]
+const eNorthLocal = new Vector3(-Math.cos(phi) * Math.cos(theta), Math.sin(phi), -Math.cos(phi) * Math.sin(theta));
+const eNorthWorld = Vector3.TransformCoordinates(eNorthLocal, Matrix.FromQuaternion(qAlign)).normalize();
+let uProj = new Vector3(0, 1, 0).subtract(targetDir.scale(Vector3.Dot(new Vector3(0, 1, 0), targetDir)));
+if (uProj.lengthSquared() < 1e-9) uProj = new Vector3(0, 0, 1).subtract(targetDir.scale(targetDir.z));
+uProj.normalize();
+const dotNu = Math.min(1, Math.max(-1, Vector3.Dot(eNorthWorld, uProj)));
+const sign = Vector3.Dot(Vector3.Cross(eNorthWorld, uProj), targetDir) >= 0 ? 1 : -1;
+const beta = Math.acos(dotNu) * sign;
+const qRoll = Quaternion.RotationAxis(targetDir, beta);
+// 5) Final
+const qFinal = qRoll.multiply(qAlign).normalize();
+earthPivot.rotation.set(0, 0, 0);
+earthPivot.rotationQuaternion = qFinal;
 ```
 
 **Moon position:**
@@ -186,6 +246,7 @@ useEffect(() => {
 
 ### GUI
 - FPS: HTML div `#stats` overlay
+- TG hint/link: текст **«ПОДРОБНЕЕ в ТГ‑Канале …»** рендерится **внутри того же `#stats`** (по канону “один overlay”). URL берётся из `import.meta.env.VITE_TELEGRAM_CHANNEL_URL`; если переменная не задана — показываем некликабельный hint.
 - Date/NT: Babylon.js AdvancedDynamicTexture
 - Никаких других HTML overlays
 
@@ -224,7 +285,7 @@ ops/ (миграции, Helm/compose, CI/CD) - МЫ НЕ ИСПОЛЬЗУЕМ Д
 
 **2. ✅ ОБЯЗАТЕЛЬНО ИСПОЛЬЗОВАТЬ:**
 - **ТОЛЬКО функции из astro-rust** для всех астрономических расчетов
-- **compute_state(jd) один раз на кадр** (буфер 15 f64: Sun zeros, Moon dist, Earth RA/Dec/dist, Zenith, Sublunar, Moon vector, AST)
+- **compute_state(jd) один раз на кадр** (буфер 27 f64, append-only: base slots [0..14] для геометрии сцены + appended [15..26] для zodiac/events UI)
 - **Zero-copy data transfer** через Float64Array и thread-local буферы
 - **Максимальная точность** с коррекциями нутации/прецессии/аберрации при необходимости
 
@@ -275,7 +336,7 @@ pub fn bad_solar_position(julian_day: f64) -> *const f64 {
 - НЕ менять индексы существующих
 - Синхронизировать: README.md, CLAUDE.md, .cursorrules, init.ts, BabylonScene.tsx, agents
 
-### STATE Buffer Layout (15 f64) — назначение для сцены
+### STATE Buffer Layout (27 f64, append-only) — назначение для сцены
 
 | Slots | Данные | Использование в сцене |
 |-------|--------|----------------------|
@@ -284,12 +345,24 @@ pub fn bad_solar_position(julian_day: f64) -> *const f64 {
 | [4] | Earth RA rad | Долгота Земли на орбите |
 | [5] | Earth Dec rad | Широта Земли на орбите |
 | [6] | Earth dist AU | Расстояние Земля-Солнце |
-| [7] | Zenith lon rad | Ориентация earthPivot (yaw) |
-| [8] | Zenith lat rad | Ориентация earthPivot (pitch) |
+| [7] | Zenith lon rad | Долгота солнечного зенита (east+, rad) |
+| [8] | Zenith lat rad | Широта солнечного зенита (rad) |
 | [9] | Sublunar lat rad | Зеленый маркер Y |
 | [10] | Sublunar lon rad | Зеленый маркер XZ |
 | [11..13] | Moon direction | Единичный вектор Земля→Луна |
 | [14] | AST rad | Apparent sidereal time |
+| [15] | Sun ecl long rad | Zodiac/events (apparent: FK5+aberr+nut) |
+| [16] | Moon ecl long rad | Zodiac/events (with nutation) |
+| [17] | Moon ecl lat rad | Events classifier (e.g. eclipses) |
+| [18] | Moon illum frac | UI/events (0..1) |
+| [19] | Moon–Sun elong rad | UI/events (0..2π) |
+| [20] | Sun zodiac tropical | 0..11 |
+| [21] | Moon zodiac tropical | 0..11 |
+| [22] | Sun zodiac sidereal (MVP=J2000) | 0..11 |
+| [23] | Moon zodiac sidereal (MVP=J2000) | 0..11 |
+| [24] | Moon true asc node long | 0..2π |
+| [25] | Moon mean perigee long | 0..2π |
+| [26] | Moon phase8 id | 0..7 |
 
 ### Алгоритм compute_state(julian_day)
 
@@ -374,6 +447,49 @@ out[13] = z
 **Шаг 9: Apparent Sidereal Time (slot 14)**
 ```
 out[14] = apparent_sidereal
+```
+
+**Шаг 10: Sun/Moon ecliptic + illumination (slots 15..19)**
+```
+// Sun apparent ecliptic longitude (FK5 + aberration + nutation) — reuse zenith pipeline inputs
+sun_ecl, sun_dist_au = astro::sun::geocent_ecl_pos(jd)
+sun_long_fk5, sun_lat_fk5 = astro::sun::ecl_coords_to_FK5(jd, sun_ecl.long, sun_ecl.lat)
+ab_long = astro::aberr::sol_aberr(sun_dist_au)
+sun_long_app = sun_long_fk5 + ab_long + nut_long
+out[15] = limit_to_two_PI(sun_long_app)
+
+// Moon longitude with nutation
+out[16] = limit_to_two_PI(moon_ecl.long + nut_long)
+out[17] = moon_ecl.lat
+
+// Illumination fraction (0..1) using ecliptic coords (units: AU)
+out[18] = astro::lunar::illum_frac_frm_ecl_coords(out[16], out[17], out[15], moon_dist_au, earth_r)
+
+// Elongation (0..2π): Δλ = λ_moon - λ_sun
+out[19] = limit_to_two_PI(out[16] - out[15])
+```
+
+**Шаг 11: Zodiac indices (slots 20..23)**
+```
+// Tropical: 12 equal sectors of 2π
+sun_trop = zodiac_index_from_long(out[15])   // 0..11
+moon_trop = zodiac_index_from_long(out[16])  // 0..11
+out[20] = sun_trop
+out[21] = moon_trop
+
+// Sidereal (MVP): precess ecliptic coords back to J2000.0 and classify
+(sun_j2000_long, _) = astro::precess::precess_ecl_coords(out[15], sun_lat_fk5, jd, JD_J2000)
+(moon_j2000_long, _) = astro::precess::precess_ecl_coords(out[16], out[17], jd, JD_J2000)
+out[22] = zodiac_index_from_long(limit_to_two_PI(sun_j2000_long))
+out[23] = zodiac_index_from_long(limit_to_two_PI(moon_j2000_long))
+```
+
+**Шаг 12: Nodes / apsides / phase8 (slots 24..26)**
+```
+JC = astro::time::julian_cent(jd)
+out[24] = limit_to_two_PI(astro::lunar::true_ascend_node(JC))
+out[25] = limit_to_two_PI(astro::lunar::mn_perigee(JC))
+out[26] = phase8_from_elong(out[19]) // 0..7
 ```
 
 ### Helper: wrap_to_pi(angle)

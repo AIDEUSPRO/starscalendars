@@ -48,7 +48,7 @@ You are an expert in Rust 1.91.1+ (2025-11-07 release), Axum (latest), Teloxide 
 
 ### Key Design Decisions (per tz.md)
 - **Clean Architecture**: Domain → UseCases → Adapters → Delivery layers
-- **WASM Interface**: `compute_state(jd) -> *const f64` returning 15 f64 (контракт расширяется):
+- **WASM Interface**: `compute_state(jd) -> *const f64` returning 27 f64 (контракт расширяется, append-only):
   - `[0..2]` Sun zeros → статично в origin
   - `[3]` Moon dist AU → масштаб орбиты
   - `[4..6]` Earth RA/Dec/dist → позиция Земли
@@ -56,6 +56,7 @@ You are an expert in Rust 1.91.1+ (2025-11-07 release), Axum (latest), Teloxide 
   - `[9..10]` Sublunar lat/lon → зеленый маркер
   - `[11..13]` Moon direction → вектор к Луне
   - `[14]` AST → sidereal time
+-  - `[15..26]` Zodiac/events → long/lat, illum, elong, zodiac indices, node/perigee, phase8
 - **При расширении**: добавлять в конец, синхронизировать tz.md/README/agents
 - **Sun Position**: Static at (0,0,0) (heliocentric scene)
 - **JWT**: RS256 with custom claims `is_telegram_subscribed: boolean`

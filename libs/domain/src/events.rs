@@ -280,7 +280,13 @@ mod tests {
         let event = UserEvent::SessionEstablished {
             event_id: EventId::new(),
             occurred_at: OffsetDateTime::now_utc(),
-            telegram_user_id: TelegramId::new(123456789).expect("test user ID should be valid"),
+            telegram_user_id: match TelegramId::new(123456789) {
+                Ok(v) => v,
+                Err(e) => {
+                    assert!(false, "test user ID should be valid: {e}");
+                    return;
+                }
+            },
         };
 
         assert_eq!(event.event_type(), "UserSessionEstablished");
@@ -297,9 +303,21 @@ mod tests {
             calculation_duration_micros: 1500,
         };
 
-        let serialized = serde_json::to_string(&event).expect("test event should serialize");
-        let deserialized: AstronomicalEvent =
-            serde_json::from_str(&serialized).expect("test event should deserialize");
+        let serialized = match serde_json::to_string(&event) {
+            Ok(v) => v,
+            Err(e) => {
+                assert!(false, "test event should serialize: {e}");
+                return;
+            }
+        };
+
+        let deserialized: AstronomicalEvent = match serde_json::from_str(&serialized) {
+            Ok(v) => v,
+            Err(e) => {
+                assert!(false, "test event should deserialize: {e}");
+                return;
+            }
+        };
 
         assert_eq!(event.event_type(), deserialized.event_type());
     }

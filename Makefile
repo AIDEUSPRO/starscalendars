@@ -10,7 +10,7 @@ quality-check: anti-patterns wasm-critical clippy security arch tasks-guard vers
 
 # 🔍 Проверка антипаттернов (with enhanced test code exclusion)
 anti-patterns:
-	@EXCLUDE_DIRS="--exclude-dir=astro-rust" ./scripts/anti-patterns.sh || true
+	@./scripts/anti-patterns.sh
 
 secret-scan:
 	@./scripts/secret-scan.sh

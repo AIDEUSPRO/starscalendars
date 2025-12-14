@@ -37,9 +37,13 @@ impl TelegramServiceImpl {
         // Test connection
         match api_service.get_me().await {
             Ok(bot_info) => {
+                let username = match bot_info.username {
+                    Some(v) => v,
+                    None => "Unknown".to_string(),
+                };
                 info!(
                     "✅ Telegram bot connected: {}",
-                    bot_info.username.unwrap_or_else(|| "Unknown".to_string())
+                    username
                 );
             }
             Err(e) => {
@@ -106,11 +110,13 @@ impl TelegramService for TelegramServiceImpl {
 impl TelegramApiService {
     /// Create new Telegram API service
     pub fn new(bot_token: String) -> Self {
+        let client = match Client::builder().timeout(Duration::from_secs(30)).build() {
+            Ok(c) => c,
+            Err(_) => Client::new(),
+        };
+
         Self {
-            client: Client::builder()
-                .timeout(Duration::from_secs(30))
-                .build()
-                .unwrap_or_else(|_| Client::new()),
+            client,
             bot_token,
             base_url: "https://api.telegram.org".to_string(),
         }
@@ -150,9 +156,10 @@ impl TelegramApiService {
             response.json().await.map_err(|e| InfraError::Http(e))?;
 
         if !get_me_response.ok {
-            let error_msg = get_me_response
-                .description
-                .unwrap_or_else(|| "Failed to get bot info".to_string());
+            let error_msg = match get_me_response.description {
+                Some(v) => v,
+                None => "Failed to get bot info".to_string(),
+            };
             return Err(InfraError::TelegramApi(error_msg));
         }
 
@@ -254,9 +261,10 @@ impl TelegramService for TelegramApiService {
             response.json().await.map_err(|e| InfraError::Http(e))?;
 
         if !send_response.ok {
-            let error_msg = send_response
-                .description
-                .unwrap_or_else(|| "Unknown Telegram API error".to_string());
+            let error_msg = match send_response.description {
+                Some(v) => v,
+                None => "Unknown Telegram API error".to_string(),
+            };
             return Err(InfraError::TelegramApi(error_msg).into());
         }
 
@@ -300,9 +308,10 @@ impl TelegramService for TelegramApiService {
             response.json().await.map_err(|e| InfraError::Http(e))?;
 
         if !chat_response.ok {
-            let error_msg = chat_response
-                .description
-                .unwrap_or_else(|| "Failed to get user info".to_string());
+            let error_msg = match chat_response.description {
+                Some(v) => v,
+                None => "Failed to get user info".to_string(),
+            };
             return Err(InfraError::TelegramApi(error_msg).into());
         }
 
@@ -310,7 +319,10 @@ impl TelegramService for TelegramApiService {
             Some(chat) => Ok(TelegramUserInfo {
                 id: chat.id,
                 username: chat.username,
-                first_name: chat.first_name.unwrap_or_else(|| "Unknown".to_string()),
+                first_name: match chat.first_name {
+                    Some(v) => v,
+                    None => "Unknown".to_string(),
+                },
                 last_name: chat.last_name,
                 is_bot: chat.chat_type == "bot",
             }),
@@ -368,11 +380,10 @@ impl Default for MockTelegramService {
 #[async_trait]
 impl TelegramService for MockTelegramService {
     async fn is_member_of_channel(&self, user_id: i64, _channel: &str) -> PortResult<bool> {
-        Ok(self
-            .user_subscriptions
-            .get(&user_id)
-            .map(|v| *v)
-            .unwrap_or(self.default_subscription_status))
+        match self.user_subscriptions.get(&user_id) {
+            Some(v) => Ok(*v),
+            None => Ok(self.default_subscription_status),
+        }
     }
 
     async fn send_message(&self, _user_id: i64, _message: &str) -> PortResult<()> {

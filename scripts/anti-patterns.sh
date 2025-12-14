@@ -14,16 +14,37 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Centralized excludes
-EXCLUDES=(--exclude-dir=.git --exclude-dir=target --exclude-dir=astro-rust --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=frontend/node_modules)
+# Centralized ripgrep excludes (ripgrep does NOT support --exclude-dir; use -g globs)
+# NOTE: also exclude build artefacts and the read-only astro-rust copy.
+RG_GLOBS=(
+  -g '!.git/**'
+  -g '!target/**'
+  -g '!astro-rust/**'
+  -g '!node_modules/**'
+  -g '!frontend/node_modules/**'
+  -g '!dist/**'
+  -g '!frontend/dist/**'
+)
 
 # Search helper (prefers ripgrep if available)
 search_content() {
   local pattern="$1"; shift
   if command -v rg >/dev/null 2>&1; then
-    rg -n --color=never -uu ${EXCLUDES[@]} -e "$pattern" "$@" || true
+    # Restrict to Rust sources only to avoid false-positives in docs/config.
+    # (ripgrep file filtering is done via --glob/-g, not via path arguments like '*.rs')
+    rg -n --color=never -uu ${RG_GLOBS[@]} -g '*.rs' -e "$pattern" "$@" || true
   else
-    grep -rn ${EXCLUDES[@]} --include="*.rs" -- "$pattern" "$@" 2>/dev/null || true
+    # GNU/BSD grep: keep portable excludes via find + grep, avoid --exclude-dir portability issues.
+    find "${@:-.}" \
+      -type f -name "*.rs" \
+      -not -path "./.git/*" \
+      -not -path "./target/*" \
+      -not -path "./astro-rust/*" \
+      -not -path "./node_modules/*" \
+      -not -path "./frontend/node_modules/*" \
+      -not -path "./dist/*" \
+      -not -path "./frontend/dist/*" \
+      -print0 2>/dev/null | xargs -0 grep -n -- "$pattern" 2>/dev/null || true
   fi
 }
 
@@ -156,19 +177,19 @@ scan_pattern() {
 # Core anti-patterns from anti.md, QUALITY.md and CLAUDE.md
 echo "🚨 Checking core anti-patterns..."
 
-scan_pattern "HashMap::new()" "HashMap initialization without capacity" "Use HashMap::with_capacity(n) for pre-allocation" "false"
-scan_pattern "panic!(" "panic! usage" "Use Result<T, E> with custom error types" "true"
+scan_pattern "HashMap::new\\(\\)" "HashMap initialization without capacity" "Use HashMap::with_capacity(n) for pre-allocation" "false"
+scan_pattern "panic!\\(" "panic! usage" "Use Result<T, E> with custom error types" "true"
 # Absolute ban: any unwrap* (includes unwrap_or*/default/else, unwrap_unchecked, unwrap_err, custom variants). No test exceptions.
 scan_pattern "\\.unwrap[[:alnum:]_]*\\(" "unwrap* usage" "Use explicit match/if let/let-else or propagate with ? (no unwrap*)" "false"
 # Absolute ban: any expect* (includes expect_unwrap variants). No test exceptions.
 scan_pattern "\\.expect[[:alnum:]_]*\\(" "expect* usage" "Use explicit match/if let/let-else or propagate with ? (no expect*)" "false"
-scan_pattern "unreachable!(" "unreachable! usage" "Use Result<T, E> with proper error handling" "true"
-scan_pattern "unimplemented!(" "unimplemented! usage" "Implement the function or use todo!() during development" "true"
-scan_pattern "BTreeMap::new()" "BTreeMap initialization without capacity" "Use BTreeMap::new() with proper sizing consideration" "false"
-scan_pattern "todo!(" "todo! usage" "Complete implementation before production" "true"
-scan_pattern "HashSet::new()" "HashSet initialization without capacity" "Use HashSet::with_capacity(n) for pre-allocation" "false"
-scan_pattern "Vec::new()" "Vec initialization without capacity" "Use Vec::with_capacity(n) for pre-allocation" "false"
-scan_pattern "eval(" "eval() function usage" "🚨 CRITICAL SECURITY VULNERABILITY - never use eval() in any context" "false"
+scan_pattern "unreachable!\\(" "unreachable! usage" "Use Result<T, E> with proper error handling" "true"
+scan_pattern "unimplemented!\\(" "unimplemented! usage" "Implement the function or use todo!() during development" "true"
+scan_pattern "BTreeMap::new\\(\\)" "BTreeMap initialization without capacity" "Use BTreeMap::new() with proper sizing consideration" "false"
+scan_pattern "todo!\\(" "todo! usage" "Complete implementation before production" "true"
+scan_pattern "HashSet::new\\(\\)" "HashSet initialization without capacity" "Use HashSet::with_capacity(n) for pre-allocation" "false"
+scan_pattern "Vec::new\\(\\)" "Vec initialization without capacity" "Use Vec::with_capacity(n) for pre-allocation" "false"
+scan_pattern "eval\\(" "eval() function usage" "🚨 CRITICAL SECURITY VULNERABILITY - never use eval() in any context" "false"
 
 echo "📋 Summary of scan results:"
 echo "  - Test code exclusions applied per CLAUDE.md"

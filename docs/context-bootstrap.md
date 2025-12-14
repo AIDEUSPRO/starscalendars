@@ -34,16 +34,36 @@ Notes:
 
 ## WASM contract and usage
 - Exactly one `compute_state(jd: f64) -> *const f64` per frame. Zero-copy Float64Array view on memory.
-- Buffer layout (length = 11 f64):
-  - Sun: x,y,z (geocentric)
-  - Moon: x,y,z (geocentric)
-  - Earth: x,y,z (heliocentric)
-  - Solar zenith: [lon_east_rad, lat_rad]
+- Buffer layout (length = 27 f64) — CANONICAL (append-only):
+  - `0..2`  Sun zeros (x,y,z = 0) by design (Sun fixed at origin; skip per-frame solar xyz math)
+  - `3`     Moon distance AU (geocentric)
+  - `4`     Earth heliocentric RA (rad)
+  - `5`     Earth heliocentric Dec (rad)
+  - `6`     Earth–Sun distance AU
+  - `7`     Solar zenith longitude (rad, east-positive)
+  - `8`     Solar zenith latitude (rad, north-positive)
+  - `9`     Sublunar latitude (rad)
+  - `10`    Sublunar longitude (rad, east-positive)
+  - `11..13` Earth-local unit vector toward Moon [x,y,z]
+  - `14`    Apparent sidereal time (rad)
+  - `15`    Sun apparent ecliptic longitude (rad; FK5 + aberration + nutation)
+  - `16`    Moon ecliptic longitude (rad; with nutation)
+  - `17`    Moon ecliptic latitude (rad)
+  - `18`    Moon illumination fraction [0..1]
+  - `19`    Moon–Sun elongation (rad; [0, 2π))
+  - `20`    Sun zodiac tropical index 0..11
+  - `21`    Moon zodiac tropical index 0..11
+  - `22`    Sun zodiac sidereal index (MVP=J2000) 0..11
+  - `23`    Moon zodiac sidereal index (MVP=J2000) 0..11
+  - `24`    Moon true ascending node longitude (rad; [0, 2π))
+  - `25`    Moon mean perigee longitude (rad; [0, 2π))
+  - `26`    Moon phase8 id 0..7
 - Extraction on scene:
-  - Sun at (0,0,0) in scene (heliocentric visualization)
-  - Earth uses Earth xyz from buffer (scale 1 AU = 700)
-  - Moon position = Earth xyz + Moon geocentric offset
-  - Zenith comes directly from the last 2 buffer values (radians)
+  - Sun stays at (0,0,0) (heliocentric visualization; slots 0..2 are unused)
+  - Earth position from RA/Dec/dist (slots 4..6) → spherical→cartesian, then RH→LH single Z flip
+  - Earth orientation from zenith lon/lat (slots 7..8) via pivot quaternion (see tz.md “Earth pivot orientation — canonical”)
+  - Moon position from Earth-local unit vector (11..13) rotated by pivot quaternion and scaled by Moon distance (3)
+  - Sublunar marker from (9..10) using the same Earth-local spherical mapping as zenith marker
 - Z-convention: any required axis flips are handled once in the scene when assigning coordinates (single Z flip RH→LH). No flips in WASM bridge.
 
 ## Zenith marker and orientation (LOCKED — canonical)
@@ -53,17 +73,41 @@ Notes:
   - Let `phi = (π/2) - lat_rad`
   - Let `theta = (-lon_east_rad) + π`  // west-positive, place on correct surface side
   - `x = r * sin(phi) * cos(theta)`; `z = r * sin(phi) * sin(theta)`; `y = r * cos(phi)`; where `r = EarthDiameter * 0.5`
-- Orient pivot so the line EarthCenter→Marker goes through scene origin (Sun):
-  - `pivot.rotation.y = -((-lon_east_rad) + π)`
-  - `pivot.rotation.z = lat_rad`
-  - `pivot.rotation.x = lat_rad`
+- Orient pivot so the line EarthCenter→zenithMarker points to the Sun (scene origin). **Implementation is quaternion-based** in `frontend/src/scene/BabylonScene.tsx` to avoid Euler edge cases:
+  - Compute `zenithLocalVector` from `(lon_east_rad, lat_rad)` using the spherical mapping above
+  - Compute `targetDirVector = normalize(SunWorldPos - EarthWorldPos)` (Sun at origin → `-EarthWorldPos`)
+  - Compute `q_align` that rotates `zenithLocalVector → targetDirVector` (handle parallel/opposite vectors)
+  - Compute a “roll” correction around `targetDirVector` to keep “local North” aligned with projected `worldUp`
+  - Final quaternion = `q_roll * q_align`, normalized; assign to `earthPivot.rotationQuaternion`; force `earthPivot.rotation = (0,0,0)`
 - Earth mesh keeps `rotation = (0,0,0)`; only pivot orients the hierarchy so Moon orbit follows tilt/azimuth.
 - Single RH→LH Z-flip applies ONLY when assigning world positions from WASM; not used for marker math.
 - This behavior is CANONICAL. Do not change without updating this file and running visual/ephemeris tests.
 
+## Camera presets (Earth ↔ Moon) — CANONICAL
+- Camera is `ArcRotateCamera`. Scene supports 2 target modes: `cameraTarget = 'earth' | 'moon'`.
+- Earth preset (`🌍` and on scene start):
+  - Approximate user longitude from timezone: `lon_deg = -tzOffsetMinutes / 4`
+  - Compute Earth-surface local point via `latLonToLocalXYZ(latDeg, lonDeg, earthRadius)`
+  - Camera pos = EarthWorldPos + localPoint + normal(localPoint)*offset
+  - **Two-phase apply** (prevents ArcRotate internal alpha/beta/radius drift when switching modes):
+    - Phase 1: `detachControl(); lockedTarget=null; setTarget(earthPos); setPosition(cameraPos); scene.render()`
+    - Phase 2: `lockedTarget=earthMesh; attachControl(canvas,true); scene.render()`
+  - Reset limits (important after Moon mode): alpha/beta free, radius clamped for Earth view.
+- Moon preset (`🌙`):
+  - Use **world** positions: `moonWorldPos = moonMesh.getAbsolutePosition()`, `earthWorldPos = earthPivot.position`
+  - **Two-phase apply**:
+    - Phase 1: `detachControl(); lockedTarget=null; setTarget(moonWorldPos); setPosition(earthWorldPos); scene.render()`
+    - Phase 2: `lockedTarget=moonMesh; attachControl(canvas,true); scene.render()`
+  - Then lock rotation by clamping `alpha/beta` to current values; allow zoom by setting `lowerRadiusLimit/upperRadiusLimit` from the now-updated `cam.radius`.
+
 ## Current achievements and next steps (2025‑08‑11)
-- Achieved: sublunar point (lunar zenith) is computed from lunar RA/Dec + apparent sidereal time; matches external sources. Moon position uses the same vector chain; longitudes now align with the marker
-- Next: move RA/Dec, AST, and sublunar φ/λ computation into `compute_state(jd)` so the scene does zero trigonometry (still exactly one call per frame). Also expose an Earth‑local unit vector for Earth→Moon to drive a visual tidal‑lock orientation (one side of the Moon facing Earth)
+- Achieved:
+  - `compute_state(jd)` is the single hot-path call and returns STATE[27] (append-only: base [0..14] for scene geometry + appended [15..26] for zodiac/events UI).
+  - Sublunar point (lunar zenith) is derived from lunar RA/Dec + apparent sidereal time and matches external sources; Moon position uses the same chain.
+  - Camera presets Earth↔Moon are implemented with a robust two-phase ArcRotate apply (see section above).
+- Next (current active cycle):
+  - Add zodiac (tropical/sidereal) and lunar events (phases/nodes/apsides/eclipses/voc) based strictly on astro-rust outputs (events may be derived classifiers/search).
+  - Add a Moon-view info panel (Babylon GUI) near the Moon and a “ПОДРОБНЕЕ в ТГ‑Канале …” hint inside `#stats` (still one overlay).
 
 ## Textures
 - Do not force `noMipmap` or `anisotropicFilteringLevel`. Use Babylon defaults.
@@ -84,6 +128,10 @@ Notes:
 ## What is implemented now (BabylonScene.tsx)
 - Reference mesh sizes/segments set. Fire=128, GodRays=100. Skybox via base path. GUI matches ref. No manual mipmaps.
 - Zenith marker placement is LOCKED per rules above (pure WASM radians, no tweaks). Pivot orientation aligns marker to the Sun. Moon follows pivot tilt.
+
+## Stats overlay (#stats)
+- There is exactly one HTML overlay div: `#stats` (FPS). No other overlays are allowed.
+- If additional UI is needed (e.g. “ПОДРОБНЕЕ в ТГ‑Канале …”), it must be rendered **inside** `#stats` (still one overlay element).
 
 ## Agent initialization prompt (paste into new chat)
 ```

@@ -12,7 +12,7 @@
 4. **Заполнить буфер** используя ТОЛЬКО astro-rust функции
 5. **Вернуть указатель** `out.as_ptr()` — JS создает Float64Array view
 
-### Текущий STATE layout (15 f64)
+### Текущий STATE layout (27 f64, append-only)
 | Slots | Данные | Назначение для сцены |
 |-------|--------|---------------------|
 | [0..2] | Sun zeros | Солнце статично в (0,0,0) |
@@ -22,6 +22,15 @@
 | [9..10] | Sublunar lat/lon | Зеленый маркер на Земле |
 | [11..13] | Moon direction | Единичный вектор Земля→Луна |
 | [14] | AST | Apparent sidereal time |
+| [15] | Sun ecl long | Zodiac/events (apparent: FK5+aberr+nut) |
+| [16] | Moon ecl long | Zodiac/events (with nutation) |
+| [17] | Moon ecl lat | Events (e.g. eclipses classifier) |
+| [18] | Moon illum frac | UI (% illuminated) |
+| [19] | Moon–Sun elong | UI/events (phase angle) |
+| [20..23] | Zodiac indices | Sun/Moon tropical + sidereal(MVP=J2000) |
+| [24] | Moon asc node long | Nodes/events |
+| [25] | Moon mean perigee long | Apsides/events |
+| [26] | Moon phase8 id | UI (0..7) |
 
 ### При расширении
 - Добавлять в конец, не менять существующие индексы
@@ -30,7 +39,8 @@
 ---
 
 - [ ] A. WASM astro core (state=15, zero-copy, one call per frame)
-  - [x] STATE layout 15 f64: Sun zeros[0..2], Moon dist AU[3], Earth RA/Dec/dist AU[4..6], Solar zenith lon/lat[7..8], sublunar lat/lon[9..10], Earth-local Moon unit vector[11..13], AST rad[14]
+  - [x] STATE base layout 15 f64 (indices 0..14) implemented and stable
+  - [ ] STATE extended layout 27 f64 (append-only indices 15..26) for zodiac/events (see table above)
   - [x] Thread-local buffer, zero-copy Float64Array view
   - [x] Sun slots zeroed; heliocentric scene; no Sun transform updates
   - [x] Timescales module UTC↔TT via (TAI−UTC)+32.184s; leap seconds table; override setters
@@ -38,12 +48,17 @@
   - [ ] Add `next_summer_solstice_from`, `next_vernal_equinox_from`, `next_autumnal_equinox_from`
   - [ ] Tests 2023–2027 events (≤10 s tolerance)
   - [ ] Confirm/extend STATE with lunar RA/Dec if needed (doc parity)
+  - [ ] Zodiac + Lunar events: extend STATE by appending new slots (do not change existing indices); export off-frame event helpers (phases/nodes/apsides/eclipses/void-of-course)
 
 - [ ] B. Frontend Babylon.js scene (React 19, TS 5.9, Babylon 8)
   - [x] Single `compute_state(jd)` per frame; reuse view; no allocations in render loop
   - [x] RH→LH single Z-flip in scene only; Babylon left-handed; no `useRightHandedSystem`
-  - [x] Consume STATE[15]: Moon dist AU, Earth RA/Dec/dist, zenith lon/lat, sublunar lat/lon, Earth-local Moon vector, AST
+  - [x] Consume STATE base slots [0..14]: Moon dist AU, Earth RA/Dec/dist, zenith lon/lat, sublunar lat/lon, Earth-local Moon vector, AST
+  - [ ] Consume STATE appended slots [15..26] for zodiac/lunar events UI
   - [x] Sun fixed at origin; materials frozen; godrays ratio=1.0
+  - [x] Camera presets Earth↔Moon: robust two-phase ArcRotate apply + reset/lock limits (Earth preset on startup and 🌍 button; Moon preset on 🌙 button)
+  - [ ] LunarInfoPanel near the Moon (Babylon GUI, `linkWithMesh`), shown only in moon camera mode
+  - [ ] `#stats` overlay: add “ПОДРОБНЕЕ в ТГ‑Канале …” inside the same single overlay div (no extra overlays)
   - [ ] Visual tidal lock for Moon using Earth→Moon vector
   - [ ] Performance pass: 60 FPS target, zero GC in loop
 
@@ -62,11 +77,11 @@
   - [ ] cargo-deny/cargo-audit wired in CI (deny.toml aligned)
 
 - [ ] E. Documentation (newcomer-complete)
-  - [ ] README: STATE[15], scene steps, RH→LH flip, single-call rule, dev RSA generation
-  - [ ] tz.md: sync with STATE[15], zero-copy, one-call; event helpers; quality gates
+  - [ ] README: STATE[27] (append-only), scene steps, RH→LH flip, single-call rule, dev RSA generation
+  - [ ] tz.md: sync with STATE[27] (append-only), zero-copy, one-call; event helpers; quality gates
   - [ ] QUALITY.md: ban unwrap_or_default; RSA policy; scene/WASM rules
   - [ ] CLAUDE.md / .cursorrules: same policies; edition 2024, no rust-version, majors-only pins
-  - [ ] Agents `.claude/agents`: updated with STATE[15], unwrap ban, RSA generation notes
+  - [ ] Agents `.claude/agents`: updated with STATE[27], unwrap ban, RSA generation notes
 
 - [ ] F. Tasks/Plans hygiene
   - [ ] Keep `task.md` Title present; tasks-guard passes

@@ -193,65 +193,65 @@ pub struct I18nService {
 
 impl I18nService {
     /// Create new I18n service with default language
-    /// 
+    ///
     /// # Errors
     /// Returns error if default language cannot be loaded
     pub fn new(default_language: &str) -> Result<Self, I18nError> {
         let _timer = PerformanceTimer::new("i18n_service_initialization");
-        
+
         let mut service = Self {
             current_language: default_language.to_string(),
             translations: HashMap::with_capacity(10), // Pre-allocated for 10 languages
             language_metadata: HashMap::with_capacity(10),
             fallback_language: "en".to_string(),
         };
-        
+
         // Initialize language metadata
         service.initialize_language_metadata()?;
-        
+
         // Load default English translations synchronously
         service.load_language_sync("en")?;
-        
+
         // Load requested language if different from English
         if default_language != "en" {
             service.load_language_sync(default_language)?;
         }
-        
+
         Ok(service)
     }
-    
+
     /// Set current language with O(1) switching performance
-    /// 
+    ///
     /// # Performance
     /// Target: < 100ms for language switching
     /// Uses pre-loaded translations for instant switching
     pub async fn set_language(&mut self, language_code: &str) -> Result<(), I18nError> {
         let _timer = PerformanceTimer::new("i18n_set_language");
-        
+
         // Validate language code
         if !self.language_metadata.contains_key(language_code) {
             return Err(I18nError::UnsupportedLanguage(language_code.to_string()));
         }
-        
+
         // Load language if not already cached
         if !self.translations.contains_key(language_code) {
             self.load_language_async(language_code).await?;
         }
-        
+
         self.current_language = language_code.to_string();
         Ok(())
     }
-    
+
     /// Get translated text with interpolation support
-    /// 
+    ///
     /// # Performance
     /// O(1) translation lookup with efficient string interpolation
     pub fn t(&self, key: &str) -> String {
         self.t_with_args(key, &[])
     }
-    
+
     /// Get translated text with argument interpolation
-    /// 
+    ///
     /// # Example
     /// ```rust
     /// let text = i18n.t_with_args("welcome_user", &[("name", "Alice")]);
@@ -261,55 +261,65 @@ impl I18nService {
         if let Some(translation) = self.get_translation(&self.current_language, key) {
             return self.interpolate_string(&translation, args);
         }
-        
+
         // Fallback to English
         if let Some(translation) = self.get_translation(&self.fallback_language, key) {
             return self.interpolate_string(&translation, args);
         }
-        
+
         // Return key if no translation found
         key.to_string()
     }
-    
+
     /// Get current language metadata
     pub fn current_language_metadata(&self) -> Option<&LanguageMetadata> {
         self.language_metadata.get(&self.current_language)
     }
-    
+
     /// Check if current language is RTL
     pub fn is_rtl(&self) -> bool {
-        self.current_language_metadata()
-            .map(|meta| meta.rtl)
-            .unwrap_or(false)
+        match self.current_language_metadata() {
+            Some(meta) => meta.rtl,
+            None => false,
+        }
     }
-    
+
     /// Get all available languages
     pub fn available_languages(&self) -> Vec<&LanguageMetadata> {
         self.language_metadata.values().collect()
     }
-    
+
     /// Get cultural greeting for current language
     pub fn cultural_greeting(&self) -> String {
-        self.current_language_metadata()
-            .map(|meta| meta.cultural_adaptations.spiritual_greeting.clone())
-            .unwrap_or_else(|| "Welcome".to_string())
+        match self.current_language_metadata() {
+            Some(meta) => meta.cultural_adaptations.spiritual_greeting.clone(),
+            None => "Welcome".to_string(),
+        }
     }
-    
+
     /// Format date according to cultural preferences
     pub fn format_date(&self, date: &time::OffsetDateTime) -> String {
         // ✅ QUALITY: Use string literal default to avoid allocation
-        let format_str = self.current_language_metadata()
-            .map(|meta| meta.cultural_adaptations.date_format.as_str())
-            .unwrap_or("%Y-%m-%d");
-        
+        let format_str = match self.current_language_metadata() {
+            Some(meta) => meta.cultural_adaptations.date_format.as_str(),
+            None => "%Y-%m-%d",
+        };
+
         // TODO: Implement proper date formatting with cultural patterns
-        let format_desc = time::format_description::parse(format_str)
-            .or_else(|_| time::format_description::parse("%Y-%m-%d"))
-            .unwrap_or_else(|_| time::format_description::well_known::Iso8601::DEFAULT);
-            
-        date.format(&format_desc).unwrap_or_else(|_| date.to_string())
+        let formatted = match time::format_description::parse(format_str) {
+            Ok(format_desc) => match date.format(&format_desc) {
+                Ok(s) => s,
+                Err(_) => date.to_string(),
+            },
+            Err(_) => match date.format(&time::format_description::well_known::Iso8601::DEFAULT) {
+                Ok(s) => s,
+                Err(_) => date.to_string(),
+            },
+        };
+
+        formatted
     }
-    
+
     fn initialize_language_metadata(&mut self) -> Result<(), I18nError> {
         // Define all supported languages with cultural adaptations
         let languages = vec![
@@ -330,7 +340,7 @@ impl I18nService {
                     ("energy".to_string(), "spiritual energy".to_string()),
                 ].iter().cloned().collect(),
             }),
-            
+
             ("zh", "Chinese", "中文", false, LanguageTier::Primary, CulturalAdaptations {
                 date_format: "%Y年%m月%d日".to_string(),
                 time_format: "%H:%M".to_string(),
@@ -347,7 +357,7 @@ impl I18nService {
                     ("energy".to_string(), "气".to_string()),
                 ].iter().cloned().collect(),
             }),
-            
+
             ("es", "Spanish", "Español", false, LanguageTier::Primary, CulturalAdaptations {
                 date_format: "%d de %B de %Y".to_string(),
                 time_format: "%H:%M".to_string(),
@@ -364,7 +374,7 @@ impl I18nService {
                     ("energy".to_string(), "energía espiritual".to_string()),
                 ].iter().cloned().collect(),
             }),
-            
+
             ("hi", "Hindi", "हिन्दी", false, LanguageTier::Primary, CulturalAdaptations {
                 date_format: "%d %B %Y".to_string(),
                 time_format: "%H:%M".to_string(),
@@ -381,7 +391,7 @@ impl I18nService {
                     ("energy".to_string(), "आध्यात्मिक ऊर्जा".to_string()),
                 ].iter().cloned().collect(),
             }),
-            
+
             ("ru", "Russian", "Русский", false, LanguageTier::Primary, CulturalAdaptations {
                 date_format: "%d %B %Y г.".to_string(),
                 time_format: "%H:%M".to_string(),
@@ -398,7 +408,7 @@ impl I18nService {
                     ("energy".to_string(), "духовная энергия".to_string()),
                 ].iter().cloned().collect(),
             }),
-            
+
             ("hy", "Armenian", "Հայերեն", false, LanguageTier::Extended, CulturalAdaptations {
                 date_format: "%Y թ. %B %d".to_string(),
                 time_format: "%H:%M".to_string(),
@@ -415,10 +425,10 @@ impl I18nService {
                     ("energy".to_string(), "հոգևոր էներգիա".to_string()),
                 ].iter().cloned().collect(),
             }),
-            
+
             // TODO: Add Tier 2 languages (Portuguese, German, French, Japanese)
         ];
-        
+
         for (code, name, native_name, rtl, tier, adaptations) in languages {
             let metadata = LanguageMetadata {
                 code: code.to_string(),
@@ -428,19 +438,19 @@ impl I18nService {
                 tier,
                 cultural_adaptations: adaptations,
             };
-            
+
             self.language_metadata.insert(code.to_string(), metadata);
         }
-        
+
         Ok(())
     }
-    
+
     fn get_translation(&self, language: &str, key: &str) -> Option<String> {
         let translations = self.translations.get(language)?;
-        
+
         // Navigate nested translation structure
         let keys: Vec<&str> = key.split('.').collect();
-        
+
         match keys.as_slice() {
             ["auth", "welcome_title"] => Some(translations.auth.welcome_title.clone()),
             ["auth", "welcome_subtitle"] => Some(translations.auth.welcome_subtitle.clone()),
@@ -454,22 +464,22 @@ impl I18nService {
             _ => None,
         }
     }
-    
+
     fn interpolate_string(&self, template: &str, args: &[(&str, &str)]) -> String {
         let mut result = template.to_string();
-        
+
         for (key, value) in args {
             let placeholder = format!("{{{}}}", key);
             result = result.replace(&placeholder, value);
         }
-        
+
         result
     }
-    
+
     fn load_language_sync(&mut self, language_code: &str) -> Result<(), I18nError> {
         // For now, load basic English translations
         // In production, this would load from JSON files or database
-        
+
         if language_code == "en" {
             let english_translations = TranslationSchema {
                 auth: AuthTranslations {
@@ -581,13 +591,13 @@ impl I18nService {
                     welcome_message: "Welcome to your spiritual journey".to_string(),
                 },
             };
-            
+
             self.translations.insert("en".to_string(), english_translations);
         }
-        
+
         Ok(())
     }
-    
+
     async fn load_language_async(&mut self, language_code: &str) -> Result<(), I18nError> {
         // TODO: Load language translations from database or files
         // For now, just load English as fallback
@@ -597,12 +607,15 @@ impl I18nService {
 
 impl Default for I18nService {
     fn default() -> Self {
-        Self::new("en").unwrap_or_else(|_| Self {
-            current_language: "en".to_string(),
-            translations: HashMap::with_capacity(10), // 10 supported languages
-            language_metadata: HashMap::with_capacity(50), // Estimated metadata entries
-            fallback_language: "en".to_string(),
-        })
+        match Self::new("en") {
+            Ok(service) => service,
+            Err(_) => Self {
+                current_language: "en".to_string(),
+                translations: HashMap::with_capacity(10),      // 10 supported languages
+                language_metadata: HashMap::with_capacity(50), // Estimated metadata entries
+                fallback_language: "en".to_string(),
+            },
+        }
     }
 }
 
@@ -611,13 +624,13 @@ impl Default for I18nService {
 pub enum I18nError {
     #[error("Unsupported language: {0}")]
     UnsupportedLanguage(String),
-    
+
     #[error("Translation not found: {0}")]
     TranslationNotFound(String),
-    
+
     #[error("Failed to load language: {0}")]
     LoadLanguageFailed(String),
-    
+
     #[error("Interpolation error: {0}")]
     InterpolationError(String),
 }

@@ -8,7 +8,12 @@ YELLOW='\033[1;33m'
 NC='\033[0m'
 
 VIOLATIONS=0
-EXCLUDES=(--exclude-dir=.git --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=build)
+RG_GLOBS=(
+  -g '!.git/**'
+  -g '!node_modules/**'
+  -g '!dist/**'
+  -g '!build/**'
+)
 
 has_js_sources() {
   find . \( -name "*.js" -o -name "*.ts" -o -name "*.tsx" \) -not -path "./node_modules/*" -not -path "./dist/*" -not -path "./build/*" | head -n1 | wc -l | tr -d ' '
@@ -17,9 +22,15 @@ has_js_sources() {
 search() {
   local pattern="$1"
   if command -v rg >/dev/null 2>&1; then
-    rg -n --color=never -uu ${EXCLUDES[@]} -e "$pattern" -- '*.js' '*.ts' '*.tsx' || true
+    rg -n --color=never -uu ${RG_GLOBS[@]} -e "$pattern" -- '*.js' '*.ts' '*.tsx' || true
   else
-    grep -rn ${EXCLUDES[@]} --include="*.js" --include="*.ts" --include="*.tsx" -- "$pattern" . 2>/dev/null || true
+    find . \
+      -type f \( -name "*.js" -o -name "*.ts" -o -name "*.tsx" \) \
+      -not -path "./.git/*" \
+      -not -path "./node_modules/*" \
+      -not -path "./dist/*" \
+      -not -path "./build/*" \
+      -print0 2>/dev/null | xargs -0 grep -n -- "$pattern" 2>/dev/null || true
   fi
 }
 

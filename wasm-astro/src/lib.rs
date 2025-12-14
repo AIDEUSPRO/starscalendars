@@ -216,7 +216,7 @@ pub fn init() {
 // Legacy compute_all API removed. Use compute_state(julian_day).
 
 /// Compute main state in a single call (future-extensible):
-/// Layout [15 f64]:
+/// Layout [27 f64]:
 /// - Sun(0..2): zeros by design (Sun fixed at scene origin; skip per-frame solar math)
 /// - Moon distance(3): geocentric distance in AU
 /// - Earth RA/Dec(4..5): heliocentric equatorial coordinates (radians)
@@ -225,10 +225,22 @@ pub fn init() {
 /// - Moon sublunar(9..10): [lat_rad, lon_east_rad] (geocentric, Earth surface point)
 /// - Moon direction(11..13): Earth-local unit vector toward Moon [x, y, z]
 /// - Apparent sidereal time(14): radians
+/// - Sun apparent ecliptic longitude(15): radians (FK5 + aberration + nutation; used for zodiac/events)
+/// - Moon ecliptic longitude(16): radians (with nutation; used for zodiac/events)
+/// - Moon ecliptic latitude(17): radians (from geocent_ecl_pos; used for events)
+/// - Moon illumination fraction(18): [0..1] (lunar::illum_frac_frm_ecl_coords)
+/// - Moon–Sun elongation(19): radians in [0, 2π)
+/// - Sun zodiac tropical index(20): 0..11
+/// - Moon zodiac tropical index(21): 0..11
+/// - Sun zodiac sidereal index (MVP J2000 definition)(22): 0..11
+/// - Moon zodiac sidereal index (MVP J2000 definition)(23): 0..11
+/// - Moon true ascending node longitude(24): radians in [0, 2π)
+/// - Moon mean perigee longitude(25): radians in [0, 2π)
+/// - Moon phase8 id(26): 0..7 (new, waxing crescent, first, waxing gibbous, full, waning gibbous, last, waning crescent)
 #[wasm_bindgen]
 pub fn compute_state(julian_day: f64) -> *const f64 {
     thread_local! {
-        static STATE_BUFFER: RefCell<[f64; 15]> = const { RefCell::new([0.0; 15]) };
+        static STATE_BUFFER: RefCell<[f64; 27]> = const { RefCell::new([0.0; 27]) };
     }
 
     STATE_BUFFER.with(|buffer| {
@@ -277,13 +289,14 @@ pub fn compute_state(julian_day: f64) -> *const f64 {
         out[6] = earth_r;
 
         // Solar zenith (7..8)
-        let (zenith_lon_east_rad, zenith_lat_rad) = solar_zenith_position_rad_internal(
-            jd,
-            nut_long,
-            true_oblq,
-            mean_sidereal,
-            apparent_sidereal,
-        );
+        let (zenith_lon_east_rad, zenith_lat_rad, sun_corrected_long, sun_lat_fk5, _sun_dist_au) =
+            solar_zenith_position_rad_internal(
+                jd,
+                nut_long,
+                true_oblq,
+                mean_sidereal,
+                apparent_sidereal,
+            );
         out[7] = zenith_lon_east_rad;
         out[8] = zenith_lat_rad;
 
@@ -307,8 +320,121 @@ pub fn compute_state(julian_day: f64) -> *const f64 {
         // Apparent sidereal time (14)
         out[14] = apparent_sidereal;
 
+        // --- Extended zodiac/events slots (append-only; do not change existing indices) ---
+        // We reuse the same solar correction pipeline as zenith for consistency:
+        // FK5 + annual aberration + nutation (apparent ecliptic longitude).
+        let sun_long_2pi = astro::angle::limit_to_two_PI(sun_corrected_long);
+        let moon_long_2pi = astro::angle::limit_to_two_PI(moon_corrected_long);
+
+        out[15] = sun_long_2pi;
+        out[16] = moon_long_2pi;
+        out[17] = moon_ecl.lat;
+
+        // Moon illumination fraction (0..1) using ecliptic coords (units: AU)
+        out[18] = astro::lunar::illum_frac_frm_ecl_coords(
+            moon_long_2pi,
+            moon_ecl.lat,
+            sun_long_2pi,
+            moon_dist_au,
+            earth_r,
+        );
+
+        // Elongation (0..2π): Δλ = λ_moon - λ_sun
+        out[19] = astro::angle::limit_to_two_PI(moon_long_2pi - sun_long_2pi);
+
+        // Zodiac indices (tropical)
+        out[20] = f64::from(zodiac_index_from_long_rad(sun_long_2pi));
+        out[21] = f64::from(zodiac_index_from_long_rad(moon_long_2pi));
+
+        // Sidereal (MVP): precess ecliptic coords back to J2000.0 and classify by longitude sector
+        // Compute J2000.0 JD via astro-rust (avoid hardcoded astronomical constants)
+        let jd_j2000 = astro::time::julian_day(&astro::time::Date {
+            year: 2000,
+            month: astro::time::Month::Jan,
+            decimal_day: 1.5, // 2000-01-01 12:00
+            cal_type: astro::time::CalType::Gregorian,
+        });
+        let (sun_j2000_long, _sun_j2000_lat) =
+            astro::precess::precess_ecl_coords(sun_long_2pi, sun_lat_fk5, jd, jd_j2000);
+        let (moon_j2000_long, _moon_j2000_lat) =
+            astro::precess::precess_ecl_coords(moon_long_2pi, moon_ecl.lat, jd, jd_j2000);
+        out[22] = f64::from(zodiac_index_from_long_rad(astro::angle::limit_to_two_PI(
+            sun_j2000_long,
+        )));
+        out[23] = f64::from(zodiac_index_from_long_rad(astro::angle::limit_to_two_PI(
+            moon_j2000_long,
+        )));
+
+        // Node / perigee longitudes
+        let jc = astro::time::julian_cent(jd);
+        out[24] = astro::angle::limit_to_two_PI(astro::lunar::true_ascend_node(jc));
+        out[25] = astro::angle::limit_to_two_PI(astro::lunar::mn_perigee(jc));
+
+        // Phase8 id from elongation
+        out[26] = f64::from(phase8_from_elongation_rad(out[19]));
+
         out.as_ptr()
     })
+}
+
+#[inline]
+fn zodiac_index_from_long_rad(long_rad: f64) -> u8 {
+    // 12 equal sectors of 2π
+    let lon = astro::angle::limit_to_two_PI(long_rad);
+    let step = std::f64::consts::TAU / 12.0;
+    if lon < step {
+        0
+    } else if lon < 2.0 * step {
+        1
+    } else if lon < 3.0 * step {
+        2
+    } else if lon < 4.0 * step {
+        3
+    } else if lon < 5.0 * step {
+        4
+    } else if lon < 6.0 * step {
+        5
+    } else if lon < 7.0 * step {
+        6
+    } else if lon < 8.0 * step {
+        7
+    } else if lon < 9.0 * step {
+        8
+    } else if lon < 10.0 * step {
+        9
+    } else if lon < 11.0 * step {
+        10
+    } else {
+        11
+    }
+}
+
+#[inline]
+fn phase8_from_elongation_rad(elong_rad: f64) -> u8 {
+    // 8-sector phase id by elongation in [0, 2π)
+    // Boundaries are at 22.5°, 67.5°, ... (π/8 offsets around the canonical phases).
+    let e = astro::angle::limit_to_two_PI(elong_rad);
+    let b0 = std::f64::consts::PI / 8.0;
+    let step = std::f64::consts::PI / 4.0; // 45°
+    if e < b0 {
+        0
+    } else if e < b0 + step {
+        1
+    } else if e < b0 + 2.0 * step {
+        2
+    } else if e < b0 + 3.0 * step {
+        3
+    } else if e < b0 + 4.0 * step {
+        4
+    } else if e < b0 + 5.0 * step {
+        5
+    } else if e < b0 + 6.0 * step {
+        6
+    } else if e < b0 + 7.0 * step {
+        7
+    } else {
+        0
+    }
 }
 
 /// Find next winter solstice (minimum solar declination) starting from given UTC JD.
@@ -400,6 +526,434 @@ pub fn next_winter_solstice_from(jd_utc_start: f64) -> f64 {
 
     // Convert TT -> UTC using ΔT at event date
     tt_to_utc_jd(jd_tt_min)
+}
+
+// ===== Zodiac/Lunar events (off-frame helpers) =====
+
+#[inline]
+fn month_from_u8(month: u8) -> Option<astro::time::Month> {
+    match month {
+        1 => Some(astro::time::Month::Jan),
+        2 => Some(astro::time::Month::Feb),
+        3 => Some(astro::time::Month::Mar),
+        4 => Some(astro::time::Month::Apr),
+        5 => Some(astro::time::Month::May),
+        6 => Some(astro::time::Month::June),
+        7 => Some(astro::time::Month::July),
+        8 => Some(astro::time::Month::Aug),
+        9 => Some(astro::time::Month::Sept),
+        10 => Some(astro::time::Month::Oct),
+        11 => Some(astro::time::Month::Nov),
+        12 => Some(astro::time::Month::Dec),
+        _ => None,
+    }
+}
+
+#[inline]
+fn date_from_jd_tt(jd_tt: f64) -> Option<astro::time::Date> {
+    let (y, m_u8, dec_day) = match astro::time::date_frm_julian_day(jd_tt) {
+        Ok(v) => v,
+        Err(_) => return None,
+    };
+    let month = match month_from_u8(m_u8) {
+        Some(m) => m,
+        None => return None,
+    };
+    Some(astro::time::Date {
+        year: y,
+        month,
+        decimal_day: dec_day,
+        cal_type: astro::time::CalType::Gregorian,
+    })
+}
+
+#[inline]
+fn wrap_to_pi_rad(x: f64) -> f64 {
+    let w = astro::angle::limit_to_two_PI(x);
+    if w > std::f64::consts::PI {
+        w - std::f64::consts::TAU
+    } else {
+        w
+    }
+}
+
+#[inline]
+fn phase_from_u8(phase: u8) -> Option<astro::lunar::Phase> {
+    match phase {
+        0 => Some(astro::lunar::Phase::New),
+        1 => Some(astro::lunar::Phase::First),
+        2 => Some(astro::lunar::Phase::Full),
+        3 => Some(astro::lunar::Phase::Last),
+        _ => None,
+    }
+}
+
+#[inline]
+fn next_moon_phase_tt_after(jd_tt_start: f64, phase: &astro::lunar::Phase) -> Option<f64> {
+    // `time_of_phase(date, phase)` returns the exact phase time closest to `date`.
+    // We search forward in bounded steps and take the first occurrence strictly after `jd_tt_start`.
+    let mut i = 0i32;
+    while i <= 84 {
+        let probe = jd_tt_start + f64::from(i) * 1.0;
+        let date = match date_from_jd_tt(probe) {
+            Some(d) => d,
+            None => return None,
+        };
+        let jd_phase = astro::lunar::time_of_phase(&date, phase);
+        if jd_phase.is_finite() && jd_phase > jd_tt_start + 1.0e-9 {
+            return Some(jd_phase);
+        }
+        i += 1;
+    }
+    None
+}
+
+#[inline]
+fn prev_moon_phase_tt_before(jd_tt_start: f64, phase: &astro::lunar::Phase) -> Option<f64> {
+    // `time_of_phase(date, phase)` returns the exact phase time closest to `date`.
+    // We search backward in bounded steps and take the last occurrence strictly before `jd_tt_start`.
+    let mut i = 0i32;
+    while i <= 84 {
+        let probe = jd_tt_start - f64::from(i) * 1.0;
+        let date = match date_from_jd_tt(probe) {
+            Some(d) => d,
+            None => return None,
+        };
+        let jd_phase = astro::lunar::time_of_phase(&date, phase);
+        if jd_phase.is_finite() && jd_phase < jd_tt_start - 1.0e-9 {
+            return Some(jd_phase);
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Find the next exact Moon phase time after the given UTC JD.
+/// `phase_id`: 0=New, 1=First, 2=Full, 3=Last.
+/// Returns JD UTC, or NaN if not found in the search window.
+#[wasm_bindgen]
+pub fn next_moon_phase_from(jd_utc_start: f64, phase_id: u8) -> f64 {
+    let jd_utc = match JulianDay::new(jd_utc_start) {
+        Ok(jd) => jd.as_f64(),
+        Err(_) => return f64::NAN,
+    };
+    let phase = match phase_from_u8(phase_id) {
+        Some(p) => p,
+        None => return f64::NAN,
+    };
+    let jd_tt0 = timescales::utc_to_tt_jd(jd_utc);
+    let jd_tt_phase = match next_moon_phase_tt_after(jd_tt0, &phase) {
+        Some(v) => v,
+        None => return f64::NAN,
+    };
+    timescales::tt_to_utc_jd(jd_tt_phase)
+}
+
+/// Moon age (days since last New Moon) and current 4-phase id.
+///
+/// Returns pointer to `[age_days, phase4_id]` where:
+/// - `age_days`: days since last New Moon (TT-based), as f64
+/// - `phase4_id`: 0=New, 1=First, 2=Full, 3=Last (last exact phase event before `jd_utc`)
+///
+/// Heavy: use off-frame (idle) only.
+#[wasm_bindgen]
+pub fn moon_age_and_phase4(jd_utc: f64) -> *const f64 {
+    thread_local! {
+        static MOON_AGE_BUF: RefCell<[f64; 2]> = const { RefCell::new([f64::NAN; 2]) };
+    }
+    let jd_utc0 = match JulianDay::new(jd_utc) {
+        Ok(jd) => jd.as_f64(),
+        Err(_) => return std::ptr::null(),
+    };
+    let jd_tt0 = timescales::utc_to_tt_jd(jd_utc0);
+    if !jd_tt0.is_finite() {
+        return std::ptr::null();
+    }
+
+    MOON_AGE_BUF.with(|b| {
+        let mut out = b.borrow_mut();
+        out[0] = f64::NAN;
+        out[1] = f64::NAN;
+
+        let last_new_tt = match prev_moon_phase_tt_before(jd_tt0, &astro::lunar::Phase::New) {
+            Some(v) => v,
+            None => return std::ptr::null(),
+        };
+        let age_days = jd_tt0 - last_new_tt;
+        out[0] = age_days;
+
+        // Determine current 4-phase bucket by the most recent exact phase event before now.
+        let mut best_tt = -f64::INFINITY;
+        let mut best_id = 0.0;
+        let phases: &[(astro::lunar::Phase, f64)] = &[
+            (astro::lunar::Phase::New, 0.0),
+            (astro::lunar::Phase::First, 1.0),
+            (astro::lunar::Phase::Full, 2.0),
+            (astro::lunar::Phase::Last, 3.0),
+        ];
+
+        let mut i = 0usize;
+        while i < phases.len() {
+            let (ref p, pid) = phases[i];
+            if let Some(t) = prev_moon_phase_tt_before(jd_tt0, p) {
+                if t.is_finite() && t > best_tt {
+                    best_tt = t;
+                    best_id = pid;
+                }
+            }
+            i += 1;
+        }
+        out[1] = best_id;
+        out.as_ptr()
+    })
+}
+
+/// Find next passages through ascending and descending nodes after given UTC JD.
+/// Returns pointer to `[jd_asc_utc, jd_desc_utc]` or null on failure.
+#[wasm_bindgen]
+pub fn next_moon_nodes_from(jd_utc_start: f64) -> *const f64 {
+    thread_local! {
+        static NODES_BUF: RefCell<[f64; 2]> = const { RefCell::new([f64::NAN; 2]) };
+    }
+    let jd_utc = match JulianDay::new(jd_utc_start) {
+        Ok(jd) => jd.as_f64(),
+        Err(_) => return std::ptr::null(),
+    };
+    let jd_tt0 = timescales::utc_to_tt_jd(jd_utc);
+    NODES_BUF.with(|b| {
+        let mut out = b.borrow_mut();
+        out[0] = f64::NAN;
+        out[1] = f64::NAN;
+        let mut i = 0i32;
+        while i <= 60 {
+            let probe = jd_tt0 + f64::from(i) * 1.0;
+            let date = match date_from_jd_tt(probe) {
+                Some(d) => d,
+                None => return std::ptr::null(),
+            };
+            let (jd_asc_tt, jd_desc_tt) = astro::lunar::time_of_passage_through_nodes(&date);
+            let jd_asc_utc = timescales::tt_to_utc_jd(jd_asc_tt);
+            let jd_desc_utc = timescales::tt_to_utc_jd(jd_desc_tt);
+            if out[0].is_nan() && jd_asc_utc.is_finite() && jd_asc_utc > jd_utc + 1.0e-9 {
+                out[0] = jd_asc_utc;
+            }
+            if out[1].is_nan() && jd_desc_utc.is_finite() && jd_desc_utc > jd_utc + 1.0e-9 {
+                out[1] = jd_desc_utc;
+            }
+            if out[0].is_finite() && out[1].is_finite() {
+                return out.as_ptr();
+            }
+            i += 1;
+        }
+        out.as_ptr()
+    })
+}
+
+#[inline]
+fn moon_dist_km_at_jd_tt(jd_tt: f64) -> f64 {
+    let (_p, dist_km) = astro::lunar::geocent_ecl_pos(jd_tt);
+    dist_km
+}
+
+#[inline]
+fn refine_parabola_vertex_time(t0: f64, dt: f64) -> f64 {
+    // Fit parabola through (t0-dt, f-), (t0, f0), (t0+dt, f+), return vertex time.
+    let fm = moon_dist_km_at_jd_tt(t0 - dt);
+    let f0 = moon_dist_km_at_jd_tt(t0);
+    let fp = moon_dist_km_at_jd_tt(t0 + dt);
+    let denom = fm - 2.0 * f0 + fp;
+    if !denom.is_finite() || denom.abs() < 1.0e-12 {
+        return t0;
+    }
+    let delta = (dt * (fm - fp)) / (2.0 * denom);
+    let delta_clamped = if delta > dt {
+        dt
+    } else if delta < -dt {
+        -dt
+    } else {
+        delta
+    };
+    t0 + delta_clamped
+}
+
+/// Find next lunar perigee and apogee after given UTC JD (numeric search on moon distance).
+/// Returns pointer to `[peri_jd_utc, apog_jd_utc]`.
+#[wasm_bindgen]
+pub fn next_moon_apsides_from(jd_utc_start: f64) -> *const f64 {
+    thread_local! {
+        static APSIDES_BUF: RefCell<[f64; 2]> = const { RefCell::new([f64::NAN; 2]) };
+    }
+    let jd_utc = match JulianDay::new(jd_utc_start) {
+        Ok(jd) => jd.as_f64(),
+        Err(_) => return std::ptr::null(),
+    };
+    let jd_tt0 = timescales::utc_to_tt_jd(jd_utc);
+    APSIDES_BUF.with(|b| {
+        let mut out = b.borrow_mut();
+        out[0] = f64::NAN;
+        out[1] = f64::NAN;
+
+        // Coarse scan: 0..40 days, step 0.5 day
+        let mut best_min_t = jd_tt0;
+        let mut best_max_t = jd_tt0;
+        let mut best_min = f64::INFINITY;
+        let mut best_max = -f64::INFINITY;
+        let mut k = 0i32;
+        while k <= 80 {
+            let t = jd_tt0 + f64::from(k) * 0.5;
+            let d = moon_dist_km_at_jd_tt(t);
+            if d.is_finite() {
+                if d < best_min {
+                    best_min = d;
+                    best_min_t = t;
+                }
+                if d > best_max {
+                    best_max = d;
+                    best_max_t = t;
+                }
+            }
+            k += 1;
+        }
+
+        // Refine with parabola vertex around best sample
+        let peri_tt = refine_parabola_vertex_time(best_min_t, 0.5);
+        let apog_tt = refine_parabola_vertex_time(best_max_t, 0.5);
+        out[0] = timescales::tt_to_utc_jd(peri_tt);
+        out[1] = timescales::tt_to_utc_jd(apog_tt);
+        out.as_ptr()
+    })
+}
+
+/// Find next potential eclipse after given UTC JD.
+/// Returns pointer to `[jd_event_utc, kind]`, where kind: 1=solar, 2=lunar. Null if none found in window.
+#[wasm_bindgen]
+pub fn next_eclipse_from(jd_utc_start: f64) -> *const f64 {
+    thread_local! {
+        static ECLIPSE_BUF: RefCell<[f64; 2]> = const { RefCell::new([0.0; 2]) };
+    }
+    let jd_utc0 = match JulianDay::new(jd_utc_start) {
+        Ok(jd) => jd.as_f64(),
+        Err(_) => return std::ptr::null(),
+    };
+    ECLIPSE_BUF.with(|b| {
+        let mut out = b.borrow_mut();
+        out[0] = 0.0;
+        out[1] = 0.0;
+        let mut jd_utc = jd_utc0;
+        let mut iter = 0i32;
+        while iter < 32 {
+            let jd_tt = timescales::utc_to_tt_jd(jd_utc);
+            let new_tt = match next_moon_phase_tt_after(jd_tt, &astro::lunar::Phase::New) {
+                Some(v) => v,
+                None => return std::ptr::null(),
+            };
+            let full_tt = match next_moon_phase_tt_after(jd_tt, &astro::lunar::Phase::Full) {
+                Some(v) => v,
+                None => return std::ptr::null(),
+            };
+            let new_utc = timescales::tt_to_utc_jd(new_tt);
+            let full_utc = timescales::tt_to_utc_jd(full_tt);
+            let (cand_tt, cand_kind) =
+                if new_utc.is_finite() && full_utc.is_finite() && new_utc <= full_utc {
+                    (new_tt, 1.0)
+                } else {
+                    (full_tt, 2.0)
+                };
+
+            // Eclipse classifier at candidate time (derived logic)
+            let (moon_ecl, _moon_dist_km) = astro::lunar::geocent_ecl_pos(cand_tt);
+            let (nut_long, _nut_oblq) = astro::nutation::nutation(cand_tt);
+            let moon_long = astro::angle::limit_to_two_PI(moon_ecl.long + nut_long);
+            let moon_lat_abs = moon_ecl.lat.abs();
+            let jc = astro::time::julian_cent(cand_tt);
+            let node_long = astro::angle::limit_to_two_PI(astro::lunar::true_ascend_node(jc));
+            // Distance to either node (ascending or descending)
+            let d1 = wrap_to_pi_rad(moon_long - node_long).abs();
+            let d2 = wrap_to_pi_rad(
+                moon_long - astro::angle::limit_to_two_PI(node_long + std::f64::consts::PI),
+            )
+            .abs();
+            let node_dist = if d1 < d2 { d1 } else { d2 };
+
+            // Heuristic thresholds (documented in tz.md as derived classifier):
+            // lat_abs <= ~1.7° and node_dist <= ~20°
+            let is_eclipse = moon_lat_abs <= 0.03 && node_dist <= 0.35;
+            if is_eclipse {
+                out[0] = timescales::tt_to_utc_jd(cand_tt);
+                out[1] = cand_kind;
+                return out.as_ptr();
+            }
+
+            // Advance search past this candidate
+            jd_utc = timescales::tt_to_utc_jd(cand_tt) + 1.0e-3;
+            iter += 1;
+        }
+        std::ptr::null()
+    })
+}
+
+/// Void of course (simplified, derived):
+/// returns 1 if Moon makes no major aspects (0/60/90/120/180) to selected planets before leaving its current tropical sign.
+/// Uses geocentric apparent ecliptic longitudes from astro-rust.
+#[wasm_bindgen]
+pub fn is_moon_void_of_course_utc(jd_utc: f64) -> u8 {
+    let jd0 = match JulianDay::new(jd_utc) {
+        Ok(jd) => jd.as_f64(),
+        Err(_) => return 0,
+    };
+    let jd_tt = timescales::utc_to_tt_jd(jd0);
+    let (nut_long, _nut_oblq) = astro::nutation::nutation(jd_tt);
+
+    // Moon longitude with nutation
+    let (moon_ecl, _moon_dist_km) = astro::lunar::geocent_ecl_pos(jd_tt);
+    let moon_long = astro::angle::limit_to_two_PI(moon_ecl.long + nut_long);
+
+    // Current sign boundary (tropical)
+    let sign = zodiac_index_from_long_rad(moon_long);
+    let step = std::f64::consts::TAU / 12.0;
+    let boundary = step * f64::from(sign.saturating_add(1));
+
+    // Major aspects (radians)
+    let aspects = [
+        0.0,
+        std::f64::consts::PI / 3.0,
+        std::f64::consts::PI / 2.0,
+        2.0 * std::f64::consts::PI / 3.0,
+        std::f64::consts::PI,
+    ];
+
+    // Selected planets (geocentric apparent ecliptic longitude, light-time corrected)
+    let planets = [
+        astro::planet::Planet::Mercury,
+        astro::planet::Planet::Venus,
+        astro::planet::Planet::Mars,
+        astro::planet::Planet::Jupiter,
+        astro::planet::Planet::Saturn,
+    ];
+
+    let mut pi = 0usize;
+    while pi < planets.len() {
+        let (p_ecl, _p_dist) = astro::planet::geocent_apprnt_ecl_coords(&planets[pi], jd_tt);
+        let p_long = astro::angle::limit_to_two_PI(p_ecl.long + nut_long);
+
+        let mut ai = 0usize;
+        while ai < aspects.len() {
+            let target = astro::angle::limit_to_two_PI(p_long + aspects[ai]);
+            // Simplified: treat planet longitude as constant over remaining sign arc.
+            if target > moon_long && target < boundary {
+                return 0;
+            }
+            ai += 1;
+        }
+        pi += 1;
+    }
+    1
+}
+
+/// Backwards-compatible name: same as `is_moon_void_of_course_utc`.
+#[wasm_bindgen]
+pub fn is_moon_void_of_course(jd_utc: f64) -> u8 {
+    is_moon_void_of_course_utc(jd_utc)
 }
 /// Compute Earth's perihelion and aphelion for a given UTC year (approximate, numeric on VSOP87 r(jd)).
 /// Returns pointer to [peri_jd_utc, peri_r_au, peri_long_rad, aph_jd_utc, aph_r_au, aph_long_rad]
@@ -1042,7 +1596,7 @@ fn solar_zenith_position_rad_internal(
     true_oblq: f64,
     _mean_sidereal_time: f64, // Kept for API consistency if needed later, but apparent is sufficient
     apparent_sidereal_time: f64,
-) -> (f64, f64) {
+) -> (f64, f64, f64, f64, f64) {
     // Geocentric solar ecliptic position with high-precision corrections
     let (sun_ecl, sun_dist_au) = astro::sun::geocent_ecl_pos(julian_day);
     // FK5 conversion (longitude/latitude)
@@ -1072,7 +1626,13 @@ fn solar_zenith_position_rad_internal(
     } else {
         two_pi_limited
     };
-    (zenith_longitude_rad, sun_declination)
+    (
+        zenith_longitude_rad,
+        sun_declination,
+        sun_corrected_long,
+        sun_lat_fk5,
+        sun_dist_au,
+    )
 }
 
 // calculate_solar_zenith_position_rad removed; zenith is included in compute_state.
@@ -1388,7 +1948,7 @@ mod tests {
         let mean_sidereal = astro::time::mn_sidr(jd);
         let apparent_sidereal = astro::time::apprnt_sidr(mean_sidereal, nut_long, true_oblq);
 
-        let (lon_east_rad, lat_rad) = solar_zenith_position_rad_internal(
+        let (lon_east_rad, lat_rad, ..) = solar_zenith_position_rad_internal(
             jd,
             nut_long,
             true_oblq,

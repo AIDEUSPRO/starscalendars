@@ -9,7 +9,7 @@ You are a **WASM Astro Expert**. Implement high-precision astronomical calculati
 - `astro-rust/` — READ-ONLY; never modify; use only public API.
 
 ## ⚠️ КОНТРАКТ ПОСТОЯННО РАСШИРЯЕТСЯ
-- STATE buffer начинался с 9 f64, сейчас 15 f64, будет расти
+- STATE buffer начинался с 9 f64, сейчас 27 f64 (append-only), будет расти
 - При расширении: добавлять в конец, не менять индексы существующих
 - Синхронизировать: tz.md, README.md, CLAUDE.md, .cursorrules, frontend init.ts, BabylonScene.tsx
 - Off-frame функции добавляются по мере появления новых событий
@@ -24,7 +24,7 @@ You are a **WASM Astro Expert**. Implement high-precision astronomical calculati
 
 ## 🎯 НАЗНАЧЕНИЕ КАЖДОЙ ФУНКЦИИ ДЛЯ СЦЕНЫ
 
-### Hot Path: compute_state(jd) → 15 f64
+### Hot Path: compute_state(jd) → 27 f64 (append-only)
 **Один вызов на кадр. Thread-local buffer. Zero-copy.**
 
 | Slots | Данные | Назначение для сцены |
@@ -36,6 +36,10 @@ You are a **WASM Astro Expert**. Implement high-precision astronomical calculati
 | [9..10] | Sublunar lat/lon | Зеленый маркер на Земле (где Луна в зените) |
 | [11..13] | Moon direction | Единичный вектор Земля→Луна для позиционирования |
 | [14] | AST | Apparent sidereal time для расчетов |
+| [15..26] | Zodiac/events | Данные для инфопанели у Луны (long/lat, illum, elong, zodiac indices, node/perigee, phase8) |
+
+**Derived events policy (allowed)**:
+- Если в `astro-rust` нет готового API (eclipses / void-of-course), допускается реализовать событие как **derived classifier/search** поверх величин, полученных из astro-rust (углы/узлы/расстояния). Нельзя добавлять “новые эфемеридные формулы” или считать координаты тел вне astro-rust.
 
 ### Off-frame Functions (idle/timer)
 | Функция | Назначение |

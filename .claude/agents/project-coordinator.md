@@ -18,7 +18,9 @@ You are a **Project Coordinator**. Coordinate development across all components,
 - ❌ Игнорирование архитектурных нарушений
 
 ## STATE Contract Coordination (РАСШИРЯЕТСЯ)
-- Текущий буфер 15 f64: Sun zeros [0..2], Moon dist [3], Earth RA/Dec/dist [4..6], Zenith [7..8], Sublunar [9..10], Moon dir [11..13], AST [14]
+- Текущий буфер 27 f64 (append-only):
+  - Base slots [0..14]: Sun zeros [0..2], Moon dist [3], Earth RA/Dec/dist [4..6], Zenith [7..8], Sublunar [9..10], Moon dir [11..13], AST [14]
+  - Appended slots [15..26]: zodiac/events (Sun/Moon ecl long/lat, illumination, elongation, zodiac indices, node/perigee longitudes, phase8 id)
 - **Контракт постоянно расширяется** под нужды сцены
 - При расширении: добавлять в конец, синхронизировать все доки и агенты
 - Ровно один `compute_state(jd)` на кадр

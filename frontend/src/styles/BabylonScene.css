@@ -149,6 +149,23 @@
   padding: 4px 6px;
   background: rgba(0, 0, 0, 0.45);
   border-radius: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.stats-tg-link {
+  color: #CCCDCE;
+  text-decoration: none;
+}
+
+.stats-tg-link:hover {
+  text-decoration: underline;
+}
+
+.stats-tg-hint {
+  color: #CCCDCE;
+  opacity: 0.9;
 }
 
 /* ✅ Animations */

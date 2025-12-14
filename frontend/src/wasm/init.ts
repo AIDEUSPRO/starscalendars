@@ -51,6 +51,13 @@ export interface WASMModule {
   readonly get_version: () => string;
   readonly memory: WebAssembly.Memory;
   readonly next_winter_solstice_from: (julianDayUtcStart: number) => number;
+  // Lunar events / zodiac (off-frame helpers; derived events are computed over astro-rust outputs in WASM)
+  readonly next_moon_phase_from: (julianDayUtcStart: number, phaseId: number) => number; // JD UTC
+  readonly next_moon_nodes_from: (julianDayUtcStart: number) => number; // ptr to 2 f64 [asc, desc] (UTC JD)
+  readonly next_moon_apsides_from: (julianDayUtcStart: number) => number; // ptr to 2 f64 [peri, apog] (UTC JD)
+  readonly next_eclipse_from: (julianDayUtcStart: number) => number; // ptr to 2 f64 [jd_utc, kind] or 0
+  readonly moon_age_and_phase4: (julianDayUtc: number) => number; // ptr to 2 f64 [age_days, phase4_id]
+  readonly is_moon_void_of_course: (julianDayUtc: number) => number; // 0/1
   readonly get_mean_obliquity: (julianDay: number) => number;
   readonly get_apparent_sidereal_time: (julianDay: number) => number;
   // NT (Quantum Time)
@@ -109,6 +116,12 @@ export const initializeWASM = async (): Promise<WASMModule> => {
 
       const compute_state_raw = (wrapper as unknown as { compute_state?: (jd: number) => number }).compute_state;
       const next_winter_solstice_from_raw = (wrapper as unknown as { next_winter_solstice_from?: (jd: number) => number }).next_winter_solstice_from;
+      const next_moon_phase_from_raw = (wrapper as unknown as { next_moon_phase_from?: (jd: number, phaseId: number) => number }).next_moon_phase_from;
+      const next_moon_nodes_from_raw = (wrapper as unknown as { next_moon_nodes_from?: (jd: number) => number }).next_moon_nodes_from;
+      const next_moon_apsides_from_raw = (wrapper as unknown as { next_moon_apsides_from?: (jd: number) => number }).next_moon_apsides_from;
+      const next_eclipse_from_raw = (wrapper as unknown as { next_eclipse_from?: (jd: number) => number }).next_eclipse_from;
+      const moon_age_and_phase4_raw = (wrapper as unknown as { moon_age_and_phase4?: (jd: number) => number }).moon_age_and_phase4;
+      const is_moon_void_of_course_raw = (wrapper as unknown as { is_moon_void_of_course?: (jd: number) => number }).is_moon_void_of_course;
       const get_version_fn = (wrapper as unknown as { get_version?: () => string }).get_version;
       const get_mean_obliquity_raw = (wrapper as unknown as { get_mean_obliquity?: (jd: number) => number }).get_mean_obliquity;
       const get_apparent_sidereal_time_raw = (wrapper as unknown as { get_apparent_sidereal_time?: (jd: number) => number }).get_apparent_sidereal_time;
@@ -122,6 +135,12 @@ export const initializeWASM = async (): Promise<WASMModule> => {
       if (typeof compute_state_raw !== 'function') throw new Error('WASM export compute_state missing');
       if (typeof get_version_fn !== 'function') throw new Error('WASM get_version export missing');
       if (typeof next_winter_solstice_from_raw !== 'function') throw new Error('WASM export next_winter_solstice_from missing');
+      if (typeof next_moon_phase_from_raw !== 'function') throw new Error('WASM export next_moon_phase_from missing');
+      if (typeof next_moon_nodes_from_raw !== 'function') throw new Error('WASM export next_moon_nodes_from missing');
+      if (typeof next_moon_apsides_from_raw !== 'function') throw new Error('WASM export next_moon_apsides_from missing');
+      if (typeof next_eclipse_from_raw !== 'function') throw new Error('WASM export next_eclipse_from missing');
+      if (typeof moon_age_and_phase4_raw !== 'function') throw new Error('WASM export moon_age_and_phase4 missing');
+      if (typeof is_moon_void_of_course_raw !== 'function') throw new Error('WASM export is_moon_void_of_course missing');
       if (typeof get_mean_obliquity_raw !== 'function') throw new Error('WASM export get_mean_obliquity missing');
       if (typeof get_apparent_sidereal_time_raw !== 'function') throw new Error('WASM export get_apparent_sidereal_time missing');
       if (typeof get_quantum_time_components_raw !== 'function') throw new Error('WASM export get_quantum_time_components missing');
@@ -152,6 +171,30 @@ export const initializeWASM = async (): Promise<WASMModule> => {
         next_winter_solstice_from: (jdStartUtc: number) => {
           if (!Number.isFinite(jdStartUtc)) throw new Error(`Invalid Julian Day: ${jdStartUtc}`);
           return next_winter_solstice_from_raw(jdStartUtc);
+        },
+        next_moon_phase_from: (jdStartUtc: number, phaseId: number) => {
+          if (!Number.isFinite(jdStartUtc) || !Number.isFinite(phaseId)) throw new Error('Invalid inputs to next_moon_phase_from');
+          return next_moon_phase_from_raw(jdStartUtc, phaseId);
+        },
+        next_moon_nodes_from: (jdStartUtc: number) => {
+          if (!Number.isFinite(jdStartUtc)) throw new Error('Invalid inputs to next_moon_nodes_from');
+          return next_moon_nodes_from_raw(jdStartUtc);
+        },
+        next_moon_apsides_from: (jdStartUtc: number) => {
+          if (!Number.isFinite(jdStartUtc)) throw new Error('Invalid inputs to next_moon_apsides_from');
+          return next_moon_apsides_from_raw(jdStartUtc);
+        },
+        next_eclipse_from: (jdStartUtc: number) => {
+          if (!Number.isFinite(jdStartUtc)) throw new Error('Invalid inputs to next_eclipse_from');
+          return next_eclipse_from_raw(jdStartUtc);
+        },
+        moon_age_and_phase4: (jdUtc: number) => {
+          if (!Number.isFinite(jdUtc)) throw new Error('Invalid inputs to moon_age_and_phase4');
+          return moon_age_and_phase4_raw(jdUtc);
+        },
+        is_moon_void_of_course: (jdUtc: number) => {
+          if (!Number.isFinite(jdUtc)) throw new Error('Invalid inputs to is_moon_void_of_course');
+          return is_moon_void_of_course_raw(jdUtc);
         },
         get_mean_obliquity: (jd: number) => {
           if (!Number.isFinite(jd)) throw new Error(`Invalid Julian Day: ${jd}`);
@@ -319,17 +362,21 @@ export const createPositionsView = (wasmModule: WASMModule, ptr: number): Result
 
 /**
  * Create zero-copy Float64Array view for STATE buffer (S/E/M + zenith rad)
- * Layout length: 11 (9 coords + 2 zenith values)
+ * Layout length: 27 (append-only; base scene uses 0..14)
  */
 // createSTATEView no longer needed; scene inlines zero-copy view
 
 /**
   * ✅ CRITICAL: STATE buffer layout (compute_state)
-  * - 0..2: Sun xyz (geocentric; AU)
-  * - 3..5: Moon xyz (geocentric; AU)
-  * - 6..8: Earth xyz (heliocentric; AU)
-  * - 9:    Solar zenith longitude (radians, east-positive)
-  * - 10:   Solar zenith latitude (radians)
+  * Base (0..14):
+  * - 0..2:  Sun zeros (Sun fixed at origin; heliocentric scene)
+  * - 3:     Moon distance AU (geocentric)
+  * - 4..6:  Earth RA/Dec/dist (heliocentric)
+  * - 7..8:  Solar zenith lon/lat (radians, east-positive lon)
+  * - 9..10: Sublunar lat/lon (radians, east-positive lon)
+  * - 11..13: Earth-local unit vector toward Moon [x,y,z]
+  * - 14:    Apparent sidereal time (radians)
+  * Appended (15..26): zodiac/events (see tz.md + wasm-astro/src/lib.rs docs)
  */
 // Old extractCelestialPositions removed; state provides zenith inline
 

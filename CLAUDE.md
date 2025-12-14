@@ -63,6 +63,7 @@ You are an expert in Rust 1.91.1+ (2025-11-07 release), Axum (latest), Teloxide 
 
 **2. ✅ ОБЯЗАТЕЛЬНО ИСПОЛЬЗОВАТЬ:**
 - **ТОЛЬКО функции из astro-rust** для всех астрономических расчетов
+- **Derived events policy (allowed)**: если в `astro-rust` нет готовой функции “события” (например, eclipses / void-of-course), допускается реализовать это как **классификатор/поиск** поверх величин, полученных из `astro-rust` (углы/узлы/расстояния). Запрещено добавлять “новые эфемеридные формулы” или рассчитывать координаты тел вне astro-rust.
 - **Полное покрытие API** (ориентир в ~24 функций) — обертка предоставляет чистые экспонированные функции для всех разделов astro-rust. Горячий путь фронтенда использует только единый `compute_state(jd)`.
 - **Zero-copy data transfer** через Float64Array и thread-local буферы
 - **Максимальная точность** с коррекциями нутации и прецессии
@@ -76,8 +77,9 @@ You are an expert in Rust 1.91.1+ (2025-11-07 release), Axum (latest), Teloxide 
 ### Implemented Components
 - **Frontend**: React 19 + Babylon.js 8 + TypeScript 5.9 with Vite 7 (needs TypeScript config fixes)
 - **Backend**: Axum server with clean architecture layers implemented (needs SQLX database setup)  
-- **WASM Module**: ✅ ПОЛНОСТЬЮ РАБОТАЕТ — `compute_state(jd)` возвращает 15 f64:
-  - Sun zeros [0..2], Moon dist [3], Earth RA/Dec/dist [4..6], Zenith [7..8], Sublunar [9..10], Moon direction [11..13], AST [14]
+- **WASM Module**: ✅ ПОЛНОСТЬЮ РАБОТАЕТ — `compute_state(jd)` возвращает 27 f64 (append-only):
+  - Base slots [0..14]: Sun zeros [0..2], Moon dist [3], Earth RA/Dec/dist [4..6], Zenith [7..8], Sublunar [9..10], Moon direction [11..13], AST [14]
+  - Appended slots [15..26]: zodiac/events (Sun/Moon ecl long/lat, illum, elongation, zodiac indices, node/perigee longitudes, phase8 id)
   - Сцена использует единый вектор на Луну из STATE; тригонометрия убрана из TS
   - `timescales` модуль: UTC↔TT (TAI−UTC+32.184s)
   - `next_winter_solstice_from` — Newton solver λ_app=270°
@@ -204,7 +206,7 @@ pnpm -w run dev:frontend-only
 
 ### Key Design Decisions (per tz.md)
 - **Clean Architecture**: Domain → UseCases → Adapters → Delivery layers
-- **WASM Interface**: `compute_state(jd) -> *const f64` returning 15 f64 (**контракт расширяется**):
+- **WASM Interface**: `compute_state(jd) -> *const f64` returning 27 f64 (**контракт расширяется, append-only**):
 
 | Slots | Данные | Назначение для сцены |
 |-------|--------|---------------------|
@@ -215,6 +217,7 @@ pnpm -w run dev:frontend-only
 | [9..10] | Sublunar lat/lon | Зеленый маркер на Земле |
 | [11..13] | Moon direction | Единичный вектор Земля→Луна |
 | [14] | AST | Apparent sidereal time |
+| [15..26] | Zodiac/events | Доп. данные для инфопанели (append-only; см. tz.md) |
 
 - **⚠️ При расширении контракта**:
   - Добавлять новые слоты в конец буфера

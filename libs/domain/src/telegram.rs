@@ -165,7 +165,10 @@ impl TelegramProfile {
 
     /// Get preferred language for i18n
     pub fn preferred_language(&self) -> &str {
-        self.language_code.as_deref().unwrap_or("en")
+        match self.language_code.as_deref() {
+            Some(code) => code,
+            None => "en",
+        }
     }
 }
 
@@ -269,13 +272,23 @@ mod tests {
         assert!(!session.is_ready());
         assert!(!session.is_expired());
 
-        let user_id = TelegramUserId::new(123456789).expect("test user ID should be valid");
-        session
-            .complete_verification(user_id)
-            .expect("test verification should succeed");
-        session
-            .establish_session()
-            .expect("test session establishment should succeed");
+        let user_id = match TelegramUserId::new(123456789) {
+            Ok(v) => v,
+            Err(e) => {
+                assert!(false, "test user ID should be valid: {e}");
+                return;
+            }
+        };
+
+        match session.complete_verification(user_id) {
+            Ok(()) => {}
+            Err(e) => assert!(false, "test verification should succeed: {e}"),
+        }
+
+        match session.establish_session() {
+            Ok(()) => {}
+            Err(e) => assert!(false, "test session establishment should succeed: {e}"),
+        }
 
         assert!(session.is_ready());
     }

@@ -10,17 +10,24 @@
 
 ## 1. Горячий путь кадра
 
-- **`compute_state(jd_utc_or_tt)`** → буфер `STATE[14]`
+- **`compute_state(jd_utc_or_tt)`** → буфер `STATE[27]` (append-only)
   - **Слоты**:
     - `STATE[0..3)` — Sun: всегда `0,0,0` (сцена гелиоцентрическая, Солнце в центре; *нет* вызова astro здесь по дизайну горячего пути).
-    - `STATE[3..6)` — Moon геоцентрические картезианские координаты (AU).
-    - `STATE[6..9)` — Earth гелиоцентрические картезианские координаты (AU).
-      - Конверсия RA/Dec использует `astro::coords::asc_frm_ecl`, `astro::coords::dec_frm_ecl`, `astro::ecliptic::mn_oblq_IAU`, `astro::nutation::nutation`.
-    - `STATE[9]` — солнечный зенит, долгота (рад, восток положителен).
-    - `STATE[10]` — солнечный зенит, широта (рад, север положителен).
-    - `STATE[11]` — Earth heliocentric Right Ascension (рад).
-    - `STATE[12]` — Earth heliocentric Declination (рад).
-    - `STATE[13]` — Earth–Sun расстояние (AU).
+    - `STATE[3]` — Moon distance (геоцентрическое) в AU.
+    - `STATE[4]` — Earth heliocentric Right Ascension (рад).
+    - `STATE[5]` — Earth heliocentric Declination (рад).
+    - `STATE[6]` — Earth–Sun расстояние (AU).
+    - `STATE[7]` — Solar zenith longitude (рад, east+).
+    - `STATE[8]` — Solar zenith latitude (рад, north+).
+    - `STATE[9]` — Sublunar latitude (рад).
+    - `STATE[10]` — Sublunar longitude (рад, east+).
+    - `STATE[11..14)` — Earth-local unit vector toward Moon `[x,y,z]`.
+    - `STATE[14]` — Apparent sidereal time (рад).
+    - `STATE[15..27)` — zodiac/events append-only (см. `wasm-astro/src/lib.rs` doc-comment):
+      - Sun/Moon ecliptic long/lat, illum fraction, elongation
+      - zodiac indices (tropical + sidereal MVP=J2000)
+      - node/perigee longitudes
+      - phase8 id
   - **Используемые функции `astro-rust`**:
     - Нутация:
       - `astro::nutation::nutation(jd)` → `(nut_long, nut_oblq)`
@@ -28,7 +35,7 @@
       - `astro::lunar::geocent_ecl_pos(jd)` → `(EclPoint { long, lat }, dist_km)`
     - Земля (гелиоцентрические эклиптические координаты, VSOP87):
       - `astro::planet::heliocent_coords(Planet::Earth, jd)` → `(long, lat, r_au)`
-    - Солнечный зенит (внутренний helper, см. ниже):
+    - Солнечный зенит (внутренний helper, см. ниже; реализован как производная логика над astro-rust величинами):
       - `solar_zenith_position_rad_internal(jd)`:
         - `astro::sun::geocent_ecl_pos`
         - `astro::sun::ecl_coords_to_FK5`
@@ -40,9 +47,14 @@
         - `astro::time::mn_sidr`
         - `astro::time::apprnt_sidr`
         - `astro::angle::limit_to_two_PI`
+    - Сублунарная точка (внутренний helper, производная логика над astro-rust величинами):
+      - `compute_sublunar_position_internal(moon_long_with_nutation, moon_lat, true_oblq, apparent_sidereal)`:
+        - `astro::coords::asc_frm_ecl` / `astro::coords::dec_frm_ecl`
+    - Earth-local вектор к Луне (геометрия на сфере Земли; без эфемеридных формул):
+      - `compute_earth_local_moon_direction(lat, lon_east)` → `[x,y,z]`
   - **Наша геометрия (допустимая)**:
-    - `ecliptic_to_cartesian(long, lat, r)` — сферические → декартовы, в `astro-rust` такой функции нет.
-    - Нормализация долгот к диапазону \([-π, π]\) после `limit_to_two_PI`.
+    - Конверсия единиц km→AU (константа 149597870.7).
+    - Нормализация долгот к диапазону \([-π, π]\) для lon_east (wrap-to-pi), когда нужно.
 
 ---
 
@@ -218,6 +230,88 @@
   - **Не использует `astro-rust`**, специально.
 
 - **`get_version()`**, **`debug_get_buffer()` (debug only)**, **`get_function_count()`**
+
+---
+
+## 6. Zodiac + Lunar Events (active roadmap; research-first mapping)
+
+> **Правило канона**: сначала ищем готовую реализацию в `astro-rust/src/*`. Если функции события нет (eclipses / void-of-course), допускается только **derived classifier/search** поверх величин, вычисленных через astro-rust.
+
+### 6.1 Zodiac (Tropical)
+
+- **Данные**: эклиптическая долгота \(\lambda\) в радианах.
+- **Используемые функции `astro-rust`**:
+  - Sun:
+    - `astro::sun::geocent_ecl_pos(jd)` → `(EclPoint { long, lat }, dist_km)`
+    - (для “аппаратной” долготы как в zenith pipeline) `astro::sun::ecl_coords_to_FK5`, `astro::aberr::sol_aberr`, `astro::nutation::nutation`
+  - Moon:
+    - `astro::lunar::geocent_ecl_pos(jd)` → `(EclPoint { long, lat }, dist_km)`
+    - `astro::nutation::nutation(jd)` (для \(\lambda_\text{with nut}\))
+- **Наша геометрия/классификация (допустимая)**:
+  - `sign_index = floor(wrap_0_2pi(lambda) / (2π/12))` → `0..11`
+
+### 6.2 Zodiac (Sidereal) — MVP definition (no external ayanamsa yet)
+
+Пока **не вводим внешние ayanamsa таблицы/формулы**. Чтобы не нарушать правило “всё из astro-rust”, sidereal-версия в MVP определяется как:
+
+- **Sidereal λ (MVP)**: \(\lambda_{J2000}\)
+  - берем \((\lambda,\beta)\) на дату и **прецессируем эклиптические координаты назад на J2000.0**.
+- **Используемые функции `astro-rust`**:
+  - `astro::precess::precess_ecl_coords(lon, lat, jd_from, jd_to)`
+    - `jd_to = 2451545.0` (J2000.0)
+- **Примечание**: Lahiri/другие ayanamsa будут добавлены отдельным “special instructions” блоком, когда определим источник/модель и убедимся, что в `astro-rust` нет готового аналога.
+
+### 6.3 Lunar phases (current + next events)
+
+- **Текущая освещённость**:
+  - `astro::lunar::illum_frac_frm_ecl_coords(moon_long, moon_lat, sun_long, earth_moon_dist, earth_sun_dist)` → fraction \([0,1]\)
+- **Ближайшие четверти (off-frame)**:
+  - `astro::lunar::Phase::{New,First,Full,Last}`
+  - `astro::lunar::time_of_phase(date: &astro::time::Date, phase: &Phase) -> f64`
+  - `astro::time::date_frm_julian_day(jd)` / `astro::time::julian_day(&date)` для связки JD↔Date
+  - TT↔UTC: используем `wasm-astro::timescales` (TAI−UTC + 32.184s)
+- **Возраст Луны (сутки, off-frame)**:
+  - В `astro-rust` нет готовой “moon age days”, но есть точное время Новолуния (`time_of_phase(..., Phase::New)`), значит **возраст** вычисляем как:
+    - `age_days = jd_tt_now - jd_tt_last_new`
+  - В WASM экспорт: `moon_age_and_phase4(jd_utc) -> *const f64` возвращает `[age_days, phase4_id]` (phase4_id — последняя из 4 фаз, случившаяся до текущего времени).
+
+### 6.4 Lunar nodes (ascending/descending)
+
+- **Ближайшие проходы узлов (off-frame)**:
+  - `astro::lunar::time_of_passage_through_nodes(date: &astro::time::Date) -> (jd_asc, jd_desc)`
+- **Текущая долгота узла (для классификаторов событий)**:
+  - `astro::lunar::true_ascend_node(JC)` (и/или `mn_ascend_node(JC)`)
+  - где `JC = astro::time::julian_cent(jd)`
+
+### 6.5 Apsides (perigee/apogee)
+
+- В `astro-rust` есть:
+  - `astro::lunar::mn_perigee(JC)` — **долгота** среднего перигея (не время события).
+- **Время перигея/апогея**: в astro-rust готовой функции нет, значит реализуем как derived search:
+  - базовая величина: расстояние Луны `moon_dist_km` из `astro::lunar::geocent_ecl_pos(jd)`
+  - алгоритм: поиск локального минимума/максимума `dist(jd)` на окне вокруг старта (scan + refinement)
+
+### 6.6 Eclipses (derived classifier/search)
+
+В `astro-rust` нет `eclipse*` API, поэтому используем:
+- кандидаты syzygy: `time_of_phase(... New/Full ...)`
+- проверка близости к узлам/плоскости: значения из
+  - `astro::lunar::geocent_ecl_pos(jd_event)` (moon lat)
+  - `astro::lunar::true_ascend_node(JC)` (node long)
+  - `astro::nutation::nutation(jd_event)` (если приводим долготы к одному “corrected” виду)
+- классификация (порог) документируется в tz.md (как часть derived policy)
+
+### 6.7 Void of course (derived classifier/search)
+
+Событие астрологическое; в `astro-rust` готового API нет, поэтому делаем как derived classifier:
+- Moon long/lat: `astro::lunar::geocent_ecl_pos(jd)`
+- Геоцентрические **аппаратные** эклиптические долготы планет-таргетов:
+  - `astro::planet::geocent_apprnt_ecl_coords(&Planet, jd)` → `(EclPoint { long, lat }, dist_au)`
+  - при необходимости FK5: `astro::planet::ecl_coords_to_FK5(jd, long, lat)`
+  - плюс `astro::nutation::nutation(jd)` если синхронизируем “corrected long”
+- Derived logic:
+  - найти время выхода Луны из текущего знака (root-find по `moon_long(t)` = boundary)
+  - проверить, существует ли момент major aspect (0°, 60°, 90°, 120°, 180°) с любой планетой-таргетом до выхода из знака
   - Чисто служебные/контрактные, без астрономических расчётов.
 
 ---

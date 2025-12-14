@@ -248,7 +248,7 @@ impl AuthUseCaseImpl {
             id: UserId::new(),
             username: user_info
                 .username
-                .unwrap_or_else(|| format!("telegram_{}", telegram_id.as_i64())),
+                .map_or_else(|| format!("telegram_{}", telegram_id.as_i64()), |v| v),
             email: None,
             telegram_user_id: Some(telegram_id),
             created_at: time::OffsetDateTime::now_utc(),

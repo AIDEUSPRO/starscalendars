@@ -38,7 +38,9 @@ StarsCalendars is a high-performance spiritual astronomy platform that provides:
 - **Thread-local buffers** for performance optimization
 - Output (bundler target) is written to `frontend/src/wasm-astro/` as `starscalendars_wasm_astro.js` + `*_bg.wasm`
 - Use left-handed Babylon system (default). Scientific coordinates remain RH (WASM). Apply single RH→LH Z flip in the scene when assigning positions; no flips in WASM bridge
-- Single-call per frame: `compute_state(jd)` returns 15 f64 values (STATE): Sun zeros [0..2], Moon distance AU [3], Earth RA/Dec/dist AU [4..6], Solar zenith lon/lat (east+, rad) [7..8], sublunar lat/lon (rad, east+) [9..10], Earth-local unit vector to Moon [11..13], apparent sidereal time rad [14].
+- Single-call per frame: `compute_state(jd)` returns **27 f64 values** (STATE, append-only):
+  - Base scene slots `[0..14]`: Sun zeros [0..2], Moon distance AU [3], Earth RA/Dec/dist AU [4..6], Solar zenith lon/lat (east+, rad) [7..8], sublunar lat/lon (rad, east+) [9..10], Earth-local unit vector to Moon [11..13], apparent sidereal time rad [14].
+  - Appended zodiac/events slots `[15..26]`: Sun/Moon ecliptic long/lat, illumination, elongation, zodiac indices (tropical+sidereal MVP=J2000), node/perigee longitudes, phase8 id (see `wasm-astro/src/lib.rs` doc-comment).
   - Sun slots [0..2] are zeros by design (Sun fixed at origin).
   - Event timing helper: `next_winter_solstice_from(jd_utc_start)` — off-frame only; high-precision λ_app(t)=270° solver (FK5 + aberration + nutation, TT↔UTC via TAI−UTC+32.184s), returns JD UTC.
 - Zenith marker placement is canonical and must not be altered:
@@ -83,6 +85,12 @@ StarsCalendars is a high-performance spiritual astronomy platform that provides:
 - **Pure Telegram** authentication (no passwords)
 - **Subscription verification** via getChatMember API
 - **GUI**: Babylon GUI for date/quantum date; a single `#stats` div overlay for FPS; no other HTML overlays
+
+### Camera (Earth ↔ Moon) — canonical behavior
+- Two camera modes exist in the scene: `cameraTarget = 'earth' | 'moon'` (see `frontend/src/scene/BabylonScene.tsx`).
+- **Earth preset** (startup + `🌍` button): positions camera above an approximated user location on Earth (timezone→longitude), using a **two-phase ArcRotate apply** (`detachControl → setTarget/setPosition → render → lockedTarget → attachControl → render`) and resets limits.
+- **Moon preset** (`🌙` button): sets camera position to Earth center (`earthPivot.position`) and target to Moon world position (`moonMesh.getAbsolutePosition()`), then locks alpha/beta (rotation) and leaves only zoom (radius limits derived from current radius).
+- **Important**: the scene uses only one HTML overlay element: `#stats`. Any extra hint like “ПОДРОБНЕЕ в ТГ‑Канале …” must be rendered inside `#stats` (still one overlay).
 
 ### Quantum Time (NT)
 - NT (quantum date) moved from JS to WASM:

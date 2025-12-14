@@ -137,12 +137,15 @@ impl WebSocketManager {
         if let Some(connection) = connections.get_mut(connection_id) {
             connection.user_id = Some(claims.user_id.clone());
             connection.authenticated = true;
-            connection.language = claims.language.unwrap_or_else(|| "en".to_string());
+            connection.language = match claims.language {
+                Some(lang) => lang,
+                None => "en".to_string(),
+            };
 
             // Track user connections for targeted messaging
             user_connections
                 .entry(claims.user_id.clone())
-                .or_insert_with(Vec::new)
+                .or_insert_with(|| Vec::with_capacity(1))
                 .push(*connection_id);
 
             info!(
