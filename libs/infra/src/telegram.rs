@@ -41,10 +41,7 @@ impl TelegramServiceImpl {
                     Some(v) => v,
                     None => "Unknown".to_string(),
                 };
-                info!(
-                    "✅ Telegram bot connected: {}",
-                    username
-                );
+                info!("✅ Telegram bot connected: {}", username);
             }
             Err(e) => {
                 error!("❌ Failed to connect to Telegram: {}", e);

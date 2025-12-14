@@ -25,12 +25,10 @@ use std::sync::Arc;
 async fn main() -> Result<()> {
     // Initialize tracing
     tracing_subscriber::registry()
-        .with(
-            match EnvFilter::try_from_default_env() {
-                Ok(filter) => filter,
-                Err(_) => EnvFilter::new("starscalendars_backend=debug,tower_http=debug"),
-            },
-        )
+        .with(match EnvFilter::try_from_default_env() {
+            Ok(filter) => filter,
+            Err(_) => EnvFilter::new("starscalendars_backend=debug,tower_http=debug"),
+        })
         .with(tracing_subscriber::fmt::layer())
         .init();
 
