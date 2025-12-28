@@ -237,12 +237,62 @@ pub fn init() {
 /// - Moon true ascending node longitude(24): radians in [0, 2π)
 /// - Moon mean perigee longitude(25): radians in [0, 2π)
 /// - Moon phase8 id(26): 0..7 (new, waxing crescent, first, waxing gibbous, full, waning gibbous, last, waning crescent)
+///
+/// ## Extended slots performance
+/// Slots 15..26 are only computed when the JS side enables them via
+/// `set_state_extended_enabled(true)`. This allows Earth-view to skip all zodiac/events math
+/// while keeping the base hot-path (0..14) intact (append-only contract preserved).
+thread_local! {
+    /// Unified STATE buffer (append-only contract).
+    static STATE_BUFFER: RefCell<[f64; 27]> = const { RefCell::new([0.0; 27]) };
+    /// Whether to compute extended slots 15..26 (zodiac/events).
+    static STATE_EXTENDED_ENABLED: RefCell<bool> = const { RefCell::new(true) };
+    /// Cached J2000.0 Julian Day (computed via astro-rust once; avoids per-frame recompute).
+    static JD_J2000_CACHE: RefCell<f64> = const { RefCell::new(f64::NAN) };
+}
+
+#[inline]
+fn jd_j2000_cached() -> f64 {
+    JD_J2000_CACHE.with(|c| {
+        let mut jd = c.borrow_mut();
+        if !jd.is_finite() {
+            // Compute J2000.0 JD via astro-rust (avoid hardcoded astronomical constants)
+            *jd = astro::time::julian_day(&astro::time::Date {
+                year: 2000,
+                month: astro::time::Month::Jan,
+                decimal_day: 1.5, // 2000-01-01 12:00
+                cal_type: astro::time::CalType::Gregorian,
+            });
+        }
+        *jd
+    })
+}
+
+/// Enable/disable extended STATE computations (slots 15..26).
+///
+/// Call this from JS when switching camera targets:
+/// - Moon view: `set_state_extended_enabled(true)`
+/// - Earth view: `set_state_extended_enabled(false)`
+///
+/// When disabling, we also clear 15..26 to NaN once to avoid stale values being observed.
+#[wasm_bindgen]
+pub fn set_state_extended_enabled(enabled: bool) {
+    STATE_EXTENDED_ENABLED.with(|f| {
+        *f.borrow_mut() = enabled;
+    });
+    if !enabled {
+        STATE_BUFFER.with(|buffer| {
+            let mut out = buffer.borrow_mut();
+            let mut i = 15usize;
+            while i < 27 {
+                out[i] = f64::NAN;
+                i += 1;
+            }
+        });
+    }
+}
 #[wasm_bindgen]
 pub fn compute_state(julian_day: f64) -> *const f64 {
-    thread_local! {
-        static STATE_BUFFER: RefCell<[f64; 27]> = const { RefCell::new([0.0; 27]) };
-    }
-
     STATE_BUFFER.with(|buffer| {
         let mut out = buffer.borrow_mut();
 
@@ -321,57 +371,55 @@ pub fn compute_state(julian_day: f64) -> *const f64 {
         out[14] = apparent_sidereal;
 
         // --- Extended zodiac/events slots (append-only; do not change existing indices) ---
-        // We reuse the same solar correction pipeline as zenith for consistency:
-        // FK5 + annual aberration + nutation (apparent ecliptic longitude).
-        let sun_long_2pi = astro::angle::limit_to_two_PI(sun_corrected_long);
-        let moon_long_2pi = astro::angle::limit_to_two_PI(moon_corrected_long);
+        // Computed only when enabled to keep Earth-view hot path minimal.
+        let extended_enabled = STATE_EXTENDED_ENABLED.with(|f| *f.borrow());
+        if extended_enabled {
+            // We reuse the same solar correction pipeline as zenith for consistency:
+            // FK5 + annual aberration + nutation (apparent ecliptic longitude).
+            let sun_long_2pi = astro::angle::limit_to_two_PI(sun_corrected_long);
+            let moon_long_2pi = astro::angle::limit_to_two_PI(moon_corrected_long);
 
-        out[15] = sun_long_2pi;
-        out[16] = moon_long_2pi;
-        out[17] = moon_ecl.lat;
+            out[15] = sun_long_2pi;
+            out[16] = moon_long_2pi;
+            out[17] = moon_ecl.lat;
 
-        // Moon illumination fraction (0..1) using ecliptic coords (units: AU)
-        out[18] = astro::lunar::illum_frac_frm_ecl_coords(
-            moon_long_2pi,
-            moon_ecl.lat,
-            sun_long_2pi,
-            moon_dist_au,
-            earth_r,
-        );
+            // Moon illumination fraction (0..1) using ecliptic coords (units: AU)
+            out[18] = astro::lunar::illum_frac_frm_ecl_coords(
+                moon_long_2pi,
+                moon_ecl.lat,
+                sun_long_2pi,
+                moon_dist_au,
+                earth_r,
+            );
 
-        // Elongation (0..2π): Δλ = λ_moon - λ_sun
-        out[19] = astro::angle::limit_to_two_PI(moon_long_2pi - sun_long_2pi);
+            // Elongation (0..2π): Δλ = λ_moon - λ_sun
+            out[19] = astro::angle::limit_to_two_PI(moon_long_2pi - sun_long_2pi);
 
-        // Zodiac indices (tropical)
-        out[20] = f64::from(zodiac_index_from_long_rad(sun_long_2pi));
-        out[21] = f64::from(zodiac_index_from_long_rad(moon_long_2pi));
+            // Zodiac indices (tropical)
+            out[20] = f64::from(zodiac_index_from_long_rad(sun_long_2pi));
+            out[21] = f64::from(zodiac_index_from_long_rad(moon_long_2pi));
 
-        // Sidereal (MVP): precess ecliptic coords back to J2000.0 and classify by longitude sector
-        // Compute J2000.0 JD via astro-rust (avoid hardcoded astronomical constants)
-        let jd_j2000 = astro::time::julian_day(&astro::time::Date {
-            year: 2000,
-            month: astro::time::Month::Jan,
-            decimal_day: 1.5, // 2000-01-01 12:00
-            cal_type: astro::time::CalType::Gregorian,
-        });
-        let (sun_j2000_long, _sun_j2000_lat) =
-            astro::precess::precess_ecl_coords(sun_long_2pi, sun_lat_fk5, jd, jd_j2000);
-        let (moon_j2000_long, _moon_j2000_lat) =
-            astro::precess::precess_ecl_coords(moon_long_2pi, moon_ecl.lat, jd, jd_j2000);
-        out[22] = f64::from(zodiac_index_from_long_rad(astro::angle::limit_to_two_PI(
-            sun_j2000_long,
-        )));
-        out[23] = f64::from(zodiac_index_from_long_rad(astro::angle::limit_to_two_PI(
-            moon_j2000_long,
-        )));
+            // Sidereal (MVP): precess ecliptic coords back to J2000.0 and classify by longitude sector
+            let jd_j2000 = jd_j2000_cached();
+            let (sun_j2000_long, _sun_j2000_lat) =
+                astro::precess::precess_ecl_coords(sun_long_2pi, sun_lat_fk5, jd, jd_j2000);
+            let (moon_j2000_long, _moon_j2000_lat) =
+                astro::precess::precess_ecl_coords(moon_long_2pi, moon_ecl.lat, jd, jd_j2000);
+            out[22] = f64::from(zodiac_index_from_long_rad(astro::angle::limit_to_two_PI(
+                sun_j2000_long,
+            )));
+            out[23] = f64::from(zodiac_index_from_long_rad(astro::angle::limit_to_two_PI(
+                moon_j2000_long,
+            )));
 
-        // Node / perigee longitudes
-        let jc = astro::time::julian_cent(jd);
-        out[24] = astro::angle::limit_to_two_PI(astro::lunar::true_ascend_node(jc));
-        out[25] = astro::angle::limit_to_two_PI(astro::lunar::mn_perigee(jc));
+            // Node / perigee longitudes
+            let jc = astro::time::julian_cent(jd);
+            out[24] = astro::angle::limit_to_two_PI(astro::lunar::true_ascend_node(jc));
+            out[25] = astro::angle::limit_to_two_PI(astro::lunar::mn_perigee(jc));
 
-        // Phase8 id from elongation
-        out[26] = f64::from(phase8_from_elongation_rad(out[19]));
+            // Phase8 id from elongation
+            out[26] = f64::from(phase8_from_elongation_rad(out[19]));
+        }
 
         out.as_ptr()
     })

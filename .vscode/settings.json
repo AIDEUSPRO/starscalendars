@@ -253,5 +253,6 @@
     "icu"
   ],
   // Final reminder of our spiritual mission
-  "workbench.startupEditor": "readme"
+  "workbench.startupEditor": "readme",
+  "kiroAgent.configureMCP": "Disabled"
 }

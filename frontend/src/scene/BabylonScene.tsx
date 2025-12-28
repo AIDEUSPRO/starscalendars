@@ -279,6 +279,24 @@ interface SceneState {
   moonPanelAnimStartMs?: number;
   moonPanelAnimDurMs?: number;
   moonPanelReturningToRest?: boolean;
+
+  // ✅ Staggered off-frame computation cache (avoids CPU spike from all heavy WASM calls at once)
+  // Each cache entry: { jd: number, data: T, computedAt: number (epoch ms) }
+  moonEventsCache?: {
+    phases?: { jd: number; data: [number, number, number, number]; computedAt: number }; // [new, first, full, last] JD UTC
+    nodes?: { jd: number; data: [number, number]; computedAt: number }; // [asc, desc] JD UTC
+    apsides?: { jd: number; data: [number, number]; computedAt: number }; // [peri, apog] JD UTC
+    age?: { jd: number; data: [number, number]; computedAt: number }; // [ageDays, phase4Id]
+    eclipse?: { jd: number; data: [number, number]; computedAt: number }; // [jd, kind]
+    voc?: { jd: number; data: number; computedAt: number }; // 0 or 1
+  };
+  // Stagger slot: which heavy computation to run this minute (0..5 round-robin)
+  moonEventsStaggerSlot?: number;
+  // Intro animation: panels spawn in front of the Moon (center) and then spread to their normal places
+  moonPanelsIntroActive?: boolean;
+  moonPanelsIntroStartMs?: number;
+  moonPanelsIntroDurMs?: number;
+  moonPanelsIntroDone?: boolean;
   // Saved “rest” transforms at the moment we entered focus (so we can animate back)
   moonPanelRestPosLeft?: Vector3;
   moonPanelRestPosRight?: Vector3;
@@ -376,16 +394,6 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
     const tS = `00${date.getSeconds().toString()}`;
 
     return `${tH.substring(tH.length - 2)}:${tMm.substring(tMm.length - 2)}:${tS.substring(tS.length - 2)}, ${tDn}, ${tD} ${tM} ${date.getFullYear().toString()} г.`;
-  }, []);
-
-  const formatCurrentTimeUTC = useCallback((date: Date): string => {
-    const tDn = RUSSIAN_DATE_NAMES.days[date.getUTCDay()]!;
-    const tD = date.getUTCDate().toString();
-    const tM = RUSSIAN_DATE_NAMES.months[date.getUTCMonth()]!;
-    const tH = `00${date.getUTCHours().toString()}`;
-    const tMm = `00${date.getUTCMinutes().toString()}`;
-    const tS = `00${date.getUTCSeconds().toString()}`;
-    return `${tH.substring(tH.length - 2)}:${tMm.substring(tMm.length - 2)}:${tS.substring(tS.length - 2)}, ${tDn}, ${tD} ${tM} ${date.getUTCFullYear().toString()} г.`;
   }, []);
 
   // ✅ КРИТИЧЕСКИЙ БЛОК 5: CREATE SKY FUNCTION (строки 350-425 из референсной сцены)
@@ -559,6 +567,10 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
       // ✅ CORRECT - Scene creation with optimized settings
       const scene = new Scene(engine);
 
+      // ✅ Disable expensive pointer tracking (we only need picking on explicit clicks)
+      scene.constantlyUpdateMeshUnderPointer = false;
+      scene.skipPointerMovePicking = true;
+
       timer.mark('scene_created');
 
       // Ensure canvas has correct size before content creation
@@ -645,8 +657,8 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
     camera.angularSensibilityY = 1000; // Standard vertical rotation
 
     // ✅ Enable inertia for smooth camera movement
-    camera.inertia = 0.9;              // Smooth camera inertia
-    camera.panningInertia = 0.9;       // Smooth panning inertia
+    camera.inertia = 0.7;              // Lower inertia = faster stop, less CPU during deceleration
+    camera.panningInertia = 0.7;       // Smooth panning inertia
     camera.fov = 1.5;                  // Match reference FOV
 
     // ✅ ONLY SUN LIGHTING - as requested!
@@ -671,7 +683,7 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
     const sunConfig = CELESTIAL_BODIES.sun!;
     const sunMesh = MeshBuilder.CreateSphere("sun", {
       diameter: sunConfig.radius, // value is DIAMETER in reference
-      segments: 15 // reference value
+      segments: 32 // smooth sphere for god rays
     }, scene);
     sunMesh.position = Vector3.Zero(); // ✅ SUN AT CENTER OF SCENE
     // Reference parity: make light the parent of the sun mesh
@@ -868,14 +880,17 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
     earthMesh.material = planetMaterial;
     try {
       const applyDisp = () => {
-        if (
-          earthMesh.isVerticesDataPresent('position') &&
-          earthMesh.isVerticesDataPresent('normal') &&
-          earthMesh.isVerticesDataPresent('uv')
-        ) {
-          earthMesh.applyDisplacementMap('/textures/earth-height.png', 0, 1);
-        } else {
-          console.warn('skip applyDisplacementMap: mesh not complete');
+        try {
+          if (
+            earthMesh.isVerticesDataPresent('position') &&
+            earthMesh.isVerticesDataPresent('normal') &&
+            earthMesh.isVerticesDataPresent('uv') &&
+            earthMesh.getVerticesData('uv')?.length
+          ) {
+            earthMesh.applyDisplacementMap('/textures/earth-height.png', 0, 1);
+          }
+        } catch {
+          // Mesh not ready for displacement - ignore
         }
       };
       if (earthMesh.isReady(true)) {
@@ -899,21 +914,21 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
     moonPivot.position.copyFrom(earthPivot.position);
     moonMesh.parent = moonPivot;
     moonMesh.position = new Vector3(16, 0, 0); // Initial local position - will be updated by WASM
+    // Keep a quaternion on the Moon mesh so per-frame lookAt doesn't allocate and we can apply a stable yaw offset.
+    moonMesh.rotationQuaternion = new Quaternion();
 
     const moonMaterial = new StandardMaterial("moonMaterial", scene);
     moonMaterial.diffuseColor = moonConfig.color;
-    moonMaterial.specularColor = new Color3(0.05, 0.05, 0.05);
-    // Textures from public folder (no mipmaps)
+    moonMaterial.specularColor = new Color3(0.1, 0.1, 0.1);
+    moonMaterial.specularPower = 16;
+    // All moon textures (pre-flipped in image editor to match Babylon UV mapping)
     const moonDiff = new Texture('/textures/moon.jpg', scene);
-
     const moonBump = new Texture('/textures/moon_bump.jpg', scene);
-
     const moonSpec = new Texture('/textures/moon_spec.jpg', scene);
-
     moonMaterial.diffuseTexture = moonDiff;
     moonMaterial.bumpTexture = moonBump;
     moonMaterial.specularTexture = moonSpec;
-    moonMaterial.freeze(); // ✅ Material optimization
+    moonMaterial.freeze();
     moonMesh.material = moonMaterial;
 
     sceneObjects.set('moon', moonMesh);
@@ -928,7 +943,7 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
     });
     cloudsMaterial.alpha = 0.9; // чуть прозрачнее
     // Clouds (NPOT) without mipmaps
-    const cloudsTex = new Texture('/textures/earth-c.jpg', scene, false, false, Texture.BILINEAR_SAMPLINGMODE);
+    const cloudsTex = new Texture('/textures/earth-c.jpg', scene);
     cloudsMaterial.setTexture('cloudsTexture', cloudsTex);
     cloudsMaterial.setVector3('lightPosition', sunLight.position); // Set static light pos once
     cloudsMaterial.freeze(); // ✅ Optimization: freeze material (only camera pos updates needed via unfreeze/freeze pattern if strict, but setVector3 usually works)
@@ -1138,6 +1153,12 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
     const applyEarthCameraPreset = (): void => {
       const state = sceneStateRef.current;
       state.cameraTarget = 'earth';
+      // Disable extended zodiac/events slots (15..26) to avoid unnecessary WASM work in Earth view
+      try {
+        wasmModule?.set_state_extended_enabled(false);
+      } catch {
+        // ignore
+      }
       const cam = state.camera;
       const earthPivotNode = state.earthPivot;
       const earthMeshNode = state.celestialMeshes.get('earth');
@@ -1191,12 +1212,22 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
       cam.upperRadiusLimit = CELESTIAL_BODIES.earth!.radius * 2;
 
       // Hide moon panels and reset focus when switching to Earth view
-      //const st = sceneStateRef.current;
-      //if (st.moonInfoPlaneLeft) st.moonInfoPlaneLeft.isVisible = false;
-      //if (st.moonInfoPlaneRight) st.moonInfoPlaneRight.isVisible = false;
-      //st.moonPanelFocus = null;
-      //st.moonPanelAnimActive = false;
-      //st.moonPanelReturningToRest = false;
+      // (fixes cases where focus mode had hidden only one panel, causing the other to remain visible in Earth view)
+      try {
+        state.moonPanelFocus = null;
+        state.moonPanelAnimActive = false;
+        state.moonPanelReturningToRest = false;
+        if (state.moonInfoPlaneLeft) {
+          state.moonInfoPlaneLeft.isVisible = false;
+          state.moonInfoPlaneLeft.setEnabled(false); // also disables GUI face child mesh
+        }
+        if (state.moonInfoPlaneRight) {
+          state.moonInfoPlaneRight.isVisible = false;
+          state.moonInfoPlaneRight.setEnabled(false); // also disables GUI face child mesh
+        }
+      } catch {
+        // ignore
+      }
     };
 
     const btnEarth = Button.CreateSimpleButton('btnEarth', '🌍');
@@ -1216,6 +1247,15 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
     const applyMoonCameraPreset = (): void => {
       const state = sceneStateRef.current;
       state.cameraTarget = 'moon';
+      // Intro disabled - panels appear at rest positions immediately
+      state.moonPanelsIntroActive = false;
+      state.moonPanelsIntroDone = true;
+      // Enable extended zodiac/events slots (15..26) for Moon HUD + derived UI
+      try {
+        wasmModule?.set_state_extended_enabled(true);
+      } catch {
+        // ignore
+      }
       const cam = state.camera;
       const moonMeshNode = state.celestialMeshes.get('moon');
       const earthPivotNode = state.earthPivot;
@@ -1248,12 +1288,12 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
       cam.attachControl(canvas, true);
       scene.render();
 
-      // Set camera distance to 2 Moon diameters (max), with limits 1.5-2.0 diameters
+      // Set camera distance to 2.0 Moon diameters (max), with limits 0.5-2.0 diameters
       const moonRadius = moonMeshNode.getBoundingInfo().boundingSphere.radiusWorld;
       const moonDiameter = moonRadius * 2;
-      const targetDistance = moonDiameter; // 2 diameters
+      const targetDistance = moonDiameter * 0.8; // 0.8 diameter
       const minDistance = moonDiameter * 0.5;
-      const maxDistance = moonDiameter * 1.5;   // 2 diameters
+      const maxDistance = moonDiameter * 2.0;   // 2.0 diameters
 
       // Set camera radius to target distance
       cam.radius = targetDistance;
@@ -1266,6 +1306,24 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
       cam.upperAlphaLimit = cam.alpha;
       cam.lowerBetaLimit = cam.beta;
       cam.upperBetaLimit = cam.beta;
+
+      // ✅ Compute Moon events immediately on entering Moon view (so panels are populated right away)
+      try {
+        if (wasmModule && !state.isMoonEventsComputing) {
+          const nowEpochMs = Date.now();
+          const currentMinute = Math.floor(nowEpochMs / 60000);
+          state.lastMoonEventsMinute = currentMinute; // prevent immediate duplicate scheduling in render loop
+          state.isMoonEventsComputing = true;
+          const snapshot = nowEpochMs;
+          if ((window as any).requestIdleCallback) {
+            (window as any).requestIdleCallback(() => computeMoonEvents(snapshot, wasmModule));
+          } else {
+            setTimeout(() => computeMoonEvents(snapshot, wasmModule), 0);
+          }
+        }
+      } catch {
+        // ignore
+      }
     };
 
     const btnMoon = Button.CreateSimpleButton('btnMoon', '🌙');
@@ -1284,12 +1342,12 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
     // ✅ Moon info panels (3D world-space) — thin 3D “wedge”: inner face near Moon, outer edge towards camera
     const mkMoon3DPanel = (name: string) => {
       const depth = 6;
-      const panelMesh = MeshBuilder.CreateBox(name, { width: 80, height: 40, depth }, scene);
+      const panelMesh = MeshBuilder.CreateBox(name, { width: 80, height: 60, depth }, scene);
       // We orient manually each frame to allow tilt/wedge effect (no billboard)
       (panelMesh as any).billboardMode = 0;
       panelMesh.isPickable = false;
       panelMesh.isVisible = false;
-      panelMesh.scaling.setAll(0.001); // pop-in animation still works
+      panelMesh.scaling.setAll(0.001); // starts tiny; runtime layout sets real scale (pixels→world)
 
       const bodyMat = new StandardMaterial(`${name}_mat`, scene);
       bodyMat.diffuseColor = new Color3(0.0, 0.0, 0.0);
@@ -1300,7 +1358,7 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
       panelMesh.material = bodyMat;
 
       // Inner face (GUI) sits on +Z side of box so after lookAt(camera) + flip it faces the camera.
-      const face = MeshBuilder.CreatePlane(`${name}_face`, { width: 80, height: 40 }, scene);
+      const face = MeshBuilder.CreatePlane(`${name}_face`, { width: 80, height: 60 }, scene);
       face.parent = panelMesh;
       // Place the GUI face on the +Z side (towards camera after lookAt+flip); rotate face so its front faces outward.
       face.position.z = (depth * 0.5) + 0.06;
@@ -1342,12 +1400,13 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
 
       const body = new TextBlock(`${name}_body`);
       const bodyTb = body;
-      bodyTb.fontSizeInPixels = 18;
-      bodyTb.height = '360px';
+      bodyTb.fontSizeInPixels = 16;
+      bodyTb.height = '420px';
       bodyTb.color = '#CCCDCE';
       bodyTb.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
       bodyTb.textVerticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
       bodyTb.textWrapping = true;
+      bodyTb.lineSpacing = '2px';
       bodyTb.text = '';
       stack.addControl(bodyTb);
 
@@ -1429,6 +1488,11 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
       moonPanelAnimStartMs: 0,
       moonPanelAnimDurMs: 260,
       moonPanelReturningToRest: false,
+      // Intro: disabled - panels start at rest positions immediately
+      moonPanelsIntroActive: false,
+      moonPanelsIntroStartMs: 0,
+      moonPanelsIntroDurMs: 650,
+      moonPanelsIntroDone: true, // Mark as done so clicks work immediately
       moonPanelRestPosLeft: Vector3.Zero(),
       moonPanelRestPosRight: Vector3.Zero(),
       moonPanelRestRotLeft: Quaternion.Identity(),
@@ -1445,16 +1509,27 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
 
     // On initial scene start, apply Moon camera preset (view on Moon)
     const state = sceneStateRef.current;
-    if (state.cameraTarget = 'moon')
-      applyMoonCameraPreset();
-    else
-      applyEarthCameraPreset();
+    // IMPORTANT: prime Earth/Moon transforms first, so the initial camera preset uses correct world positions.
+    // Otherwise the Moon camera can start from the wrong side until the user re-clicks the Moon button.
+    try {
+      if (wasmModule) {
+        updateCelestialPositionsRealtime(wasmModule, Date.now());
+        scene.render();
+      }
+    } catch {
+      // ignore
+    }
+    if (state.cameraTarget === 'moon') applyMoonCameraPreset();
+    else applyEarthCameraPreset();
 
     // ✅ Click-to-focus moon panels (toggle). No per-frame work; runs only on clicks.
     scene.onPointerDown = (_evt, pickInfo) => {
       try {
         const st = sceneStateRef.current;
         if (st.cameraTarget !== 'moon') return;
+        // During intro animation or active focus animation, ignore clicks to keep interaction strict.
+        if (st.moonPanelsIntroActive && !st.moonPanelsIntroDone) return;
+        if (st.moonPanelAnimActive) return;
         if (!pickInfo || !pickInfo.hit) return;
         const picked = pickInfo.pickedMesh;
         if (!picked) return;
@@ -1470,6 +1545,23 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
         const cam = st.camera;
         const moon = st.celestialMeshes.get('moon');
         if (!lp || !rp || !cam || !moon) return;
+        // Only one panel can be focused at a time: while one is in front, ignore clicks on the other.
+        if (st.moonPanelFocus && st.moonPanelFocus !== clicked) return;
+
+        // Helpers: keep current panel orientation when moving between Euler (runtime layout) and Quaternion (focus animation).
+        const copyMeshRotToQuat = (mesh: Mesh, out: Quaternion): void => {
+          if (mesh.rotationQuaternion) {
+            out.copyFrom(mesh.rotationQuaternion);
+          } else {
+            Quaternion.FromEulerAnglesToRef(mesh.rotation.x, mesh.rotation.y, mesh.rotation.z, out);
+          }
+        };
+        const ensureMeshRotQuatFromCurrent = (mesh: Mesh): void => {
+          if (mesh.rotationQuaternion) return;
+          const q = new Quaternion();
+          Quaternion.FromEulerAnglesToRef(mesh.rotation.x, mesh.rotation.y, mesh.rotation.z, q);
+          mesh.rotationQuaternion = q;
+        };
 
         // If already focused on this panel → animate back to saved rest
         if (st.moonPanelFocus === clicked) {
@@ -1483,9 +1575,15 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
           st.moonPanelToPos?.copyFrom(restPos);
           st.moonPanelFromScale?.copyFrom(focused.scaling);
           st.moonPanelToScale?.copyFrom(restScale);
-          if (!focused.rotationQuaternion) focused.rotationQuaternion = Quaternion.Identity();
-          st.moonPanelFromRot?.copyFrom(focused.rotationQuaternion);
+          if (st.moonPanelFromRot) {
+            copyMeshRotToQuat(focused, st.moonPanelFromRot);
+          }
           st.moonPanelToRot?.copyFrom(restRot);
+          // Ensure animation uses quaternion without changing visible orientation
+          ensureMeshRotQuatFromCurrent(focused);
+          if (focused.rotationQuaternion && st.moonPanelFromRot) {
+            focused.rotationQuaternion.copyFrom(st.moonPanelFromRot);
+          }
 
           st.moonPanelAnimStartMs = Date.now();
           st.moonPanelAnimActive = true;
@@ -1500,67 +1598,102 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
         // Save rest transforms at entry (so we can animate back even if time moves)
         st.moonPanelRestPosLeft?.copyFrom(lp.position);
         st.moonPanelRestPosRight?.copyFrom(rp.position);
-        if (!lp.rotationQuaternion) lp.rotationQuaternion = Quaternion.Identity();
-        if (!rp.rotationQuaternion) rp.rotationQuaternion = Quaternion.Identity();
-        st.moonPanelRestRotLeft?.copyFrom(lp.rotationQuaternion);
-        st.moonPanelRestRotRight?.copyFrom(rp.rotationQuaternion);
+        if (st.moonPanelRestRotLeft) copyMeshRotToQuat(lp, st.moonPanelRestRotLeft);
+        if (st.moonPanelRestRotRight) copyMeshRotToQuat(rp, st.moonPanelRestRotRight);
         st.moonPanelRestScaleLeft?.copyFrom(lp.scaling);
         st.moonPanelRestScaleRight?.copyFrom(rp.scaling);
 
-        // Compute focus target transform: centered and slightly in front of the Moon
+        // Compute focus target transform: centered in front of the Moon.
+        // IMPORTANT: do NOT use screen-space depth hacks here (nonlinear) — they cause the “from camera” look.
         const w = engine.getRenderWidth(true);
         const h = engine.getRenderHeight(true);
         const viewport = { x: 0, y: 0, width: w, height: h } as any;
         const identity = Matrix.Identity();
         const transform = scene.getTransformMatrix();
         const moonWorld = moon.getAbsolutePosition();
-        const moonScreen = Vector3.Project(moonWorld, identity, transform, viewport);
-        const focusZ = Math.max(0.02, moonScreen.z - 0.12);
+        const camPos = cam.position;
+        const toMoon = moonWorld.subtract(camPos);
+        const camToMoon = toMoon.length();
+        if (!(camToMoon > 1e-6)) return;
+        const dirToMoon = toMoon.scale(1 / camToMoon);
 
-        const centerScreen = new Vector3(w * 0.5, h * 0.5, focusZ);
-        const focusWorld = Vector3.Unproject(centerScreen, w, h, identity, cam.getViewMatrix(), cam.getProjectionMatrix(true));
+        // Place focus panel at ~1.5 Moon radii from the camera (user spec), clamped to stay in front of the Moon.
+        const moonRadiusWorld = moon.getBoundingInfo().boundingSphere.radiusWorld;
+        const desiredFromCam = moonRadiusWorld * 1.5;
+        const maxFromCam = Math.max(0.05, camToMoon - (moonRadiusWorld * 0.6));
+        const fromCam = Math.min(desiredFromCam, maxFromCam);
+        const focusWorld = camPos.add(dirToMoon.scale(fromCam));
 
-        // Focus size in pixels (readable card, mobile portrait ok)
-        const focusWpx = Math.min(560, Math.max(320, Math.floor(w * 0.86)));
-        const focusHpx = Math.min(240, Math.max(150, Math.floor(h * 0.28)));
-        const c0 = Vector3.Unproject(new Vector3(w * 0.5, h * 0.5, focusZ), w, h, identity, cam.getViewMatrix(), cam.getProjectionMatrix(true));
-        const c1 = Vector3.Unproject(new Vector3(w * 0.5 + 1, h * 0.5, focusZ), w, h, identity, cam.getViewMatrix(), cam.getProjectionMatrix(true));
-        const c2 = Vector3.Unproject(new Vector3(w * 0.5, h * 0.5 + 1, focusZ), w, h, identity, cam.getViewMatrix(), cam.getProjectionMatrix(true));
-        const worldPerPxX = Vector3.Distance(c0, c1);
-        const worldPerPxY = Vector3.Distance(c0, c2);
-        const desiredWorldW = worldPerPxX * focusWpx;
-        const desiredWorldH = worldPerPxY * focusHpx;
-        const sx = desiredWorldW / 80;
-        const sy = desiredWorldH / 40;
+        // Focus size: same logic as render loop
+        // Portrait: small padding (25px), Landscape: larger padding (50px)
+        const isPortrait = h > w;
+        const edgePad = isPortrait ? 25 : 50;
+        const maxWpx = w - edgePad * 2;
+        const maxHpx = h - edgePad * 2;
+        // Panel base is 80x60 world units (4:3 ratio)
+        // Portrait: use more square ratio (height = width * 0.9 instead of 0.75)
+        // Landscape: keep 4:3 ratio (height = width * 0.75)
+        const aspectRatio = isPortrait ? 0.9 : 0.75;
+        const focusWpx = Math.max(280, Math.min(maxWpx, maxHpx / aspectRatio));
+
+        // Convert px→world at the focus depth (reuse panelTmp vectors)
+        const focusScreen = Vector3.Project(focusWorld, identity, transform, viewport);
+        const focusZ = focusScreen.z;
+        const view = cam.getViewMatrix();
+        const proj = cam.getProjectionMatrix(true);
+        panelTmp3.set(w * 0.5, h * 0.5, focusZ);
+        Vector3.UnprojectToRef(panelTmp3, w, h, identity, view, proj, panelTmp3);
+        panelTmp4.set(w * 0.5 + 1, h * 0.5, focusZ);
+        Vector3.UnprojectToRef(panelTmp4, w, h, identity, view, proj, panelTmp4);
+        const worldPerPxX = Vector3.Distance(panelTmp3, panelTmp4);
+        // Uniform scale to preserve aspect ratio
+        const sx = (worldPerPxX * focusWpx) / 80;
+        const sy = sx;
 
         const focused = clicked === 'left' ? lp : rp;
         // Rotate flat to camera (no tilt) and ensure readable side
         const prevPos = focused.position.clone();
         const prevScale = focused.scaling.clone();
-        const prevRot = focused.rotationQuaternion ? focused.rotationQuaternion.clone() : Quaternion.Identity();
+        const prevEuler = focused.rotation.clone();
+        const prevHadQuat = Boolean(focused.rotationQuaternion);
+        const prevQuat = focused.rotationQuaternion ? focused.rotationQuaternion.clone() : null;
+        // Temporarily move to focus point and compute a camera-facing target quaternion
         focused.position.copyFrom(focusWorld);
+        ensureMeshRotQuatFromCurrent(focused);
         focused.lookAt(cam.position);
-        if (!focused.rotationQuaternion) focused.rotationQuaternion = Quaternion.Identity();
-        // Ensure +Z faces camera
-        const fwd = focused.getDirection(new Vector3(0, 0, 1));
-        const toCam = cam.position.subtract(focused.position);
-        if (Vector3.Dot(fwd, toCam) < 0) {
-          focused.addRotation(0, Math.PI, 0);
+        if (focused.rotationQuaternion) {
+          // Ensure +Z faces camera (avoid mirrored backside)
+          const fwd = focused.getDirection(new Vector3(0, 0, 1));
+          const toCam = cam.position.subtract(focused.position);
+          if (Vector3.Dot(fwd, toCam) < 0) {
+            const flip = new Quaternion();
+            Quaternion.FromEulerAnglesToRef(0, Math.PI, 0, flip);
+            focused.rotationQuaternion.multiplyInPlace(flip);
+          }
         }
-        const targetRot = focused.rotationQuaternion.clone();
-        // restore before anim
+        const targetRot = focused.rotationQuaternion ? focused.rotationQuaternion.clone() : Quaternion.Identity();
+        // Restore original transforms/state before starting the animation
         focused.position.copyFrom(prevPos);
         focused.scaling.copyFrom(prevScale);
-        focused.rotationQuaternion = prevRot.clone();
+        focused.rotation.copyFrom(prevEuler);
+        if (prevHadQuat) {
+          focused.rotationQuaternion = prevQuat;
+        } else {
+          focused.rotationQuaternion = null;
+        }
 
         // Setup animation endpoints (from current → focus)
         st.moonPanelFromPos?.copyFrom(focused.position);
         st.moonPanelToPos?.copyFrom(focusWorld);
         st.moonPanelFromScale?.copyFrom(focused.scaling);
         st.moonPanelToScale?.set(sx, sy, sx);
-        if (!focused.rotationQuaternion) focused.rotationQuaternion = Quaternion.Identity();
-        st.moonPanelFromRot?.copyFrom(focused.rotationQuaternion);
+        if (st.moonPanelFromRot) copyMeshRotToQuat(focused, st.moonPanelFromRot);
         st.moonPanelToRot?.copyFrom(targetRot);
+        // Ensure animation uses quaternion without changing visible orientation
+        ensureMeshRotQuatFromCurrent(focused);
+        if (focused.rotationQuaternion && st.moonPanelFromRot) {
+          focused.rotationQuaternion.copyFrom(st.moonPanelFromRot);
+        }
 
         st.moonPanelAnimStartMs = Date.now();
         st.moonPanelAnimActive = true;
@@ -1609,61 +1742,6 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
         sceneStateRef.current.lastSecond = currentSecond;
         const nowDate = new Date(nowEpochMs);
         if (sceneStateRef.current.tbTD) sceneStateRef.current.tbTD.text = formatCurrentTime(nowDate);
-
-        // ✅ Moon info panels text update (once per second; UI only)
-        const st = sceneStateRef.current;
-        if (
-          st.cameraTarget === 'moon'
-          && st.tbMoonInfoTitleLeft && st.tbMoonInfoBodyLeft
-          && st.tbMoonInfoTitleRight && st.tbMoonInfoBodyRight
-        ) {
-          const ziMoonT = st.moonZodiacTropical ?? 0;
-          const ziMoonS = st.moonZodiacSidereal ?? 0;
-          const ziSunT = st.sunZodiacTropical ?? 0;
-          const ziSunS = st.sunZodiacSidereal ?? 0;
-          const illum = st.moonIllumFrac ?? 0;
-          const phase8 = st.moonPhase8 ?? 0;
-          const phaseName = MOON_PHASE8_RU[phase8] ?? '—';
-          const pct = Math.max(0, Math.min(100, Math.round(illum * 100)));
-          const toDeg = (rad: number) => (rad * 180 / Math.PI);
-
-          const elongDeg = toDeg(st.moonElongRad ?? 0).toFixed(1);
-          const nodeDeg = toDeg(st.moonNodeLongRad ?? 0).toFixed(1);
-          const perDeg = toDeg(st.moonPerigeeLongRad ?? 0).toFixed(1);
-          const distKm = Math.round(st.moonDistKm ?? 0).toLocaleString('ru-RU');
-          const ageDays = (st.moonAgeDays ?? Number.NaN);
-          const ageText = Number.isFinite(ageDays) ? ageDays.toFixed(2) : '—';
-
-          // Determine whether distance is currently decreasing (heading to perigee) or increasing (heading to apogee)
-          const prevDist = st.prevMoonDistKm ?? Number.NaN;
-          const curDist = st.moonDistKm ?? Number.NaN;
-          const headingToPerigee = Number.isFinite(prevDist) && Number.isFinite(curDist) ? (curDist < prevDist) : true;
-          const nowJD = JULIAN_DAY_UNIX_EPOCH + nowEpochMs / 86400000.0;
-          const targetJD = headingToPerigee ? (st.nextMoonPerigeeUtcJD ?? Number.NaN) : (st.nextMoonApogeeUtcJD ?? Number.NaN);
-          const daysToTarget = Number.isFinite(targetJD) ? (targetJD - nowJD) : Number.NaN;
-          const daysText = Number.isFinite(daysToTarget) ? Math.max(0, daysToTarget).toFixed(2) : '—';
-          const apsisName = headingToPerigee ? 'перигея' : 'апогея';
-
-          // Left panel: "now" numbers (keep Moon unobstructed: panel is offset in screen space)
-          st.tbMoonInfoTitleLeft.text = `Луна: ${phaseName} (${pct}%)`;
-          st.tbMoonInfoBodyLeft.text =
-            `Местное: ${formatCurrentTime(new Date(nowEpochMs))}\n` +
-            `UTC:     ${formatCurrentTimeUTC(new Date(nowEpochMs))}\n` +
-            `Расст.: ${distKm} км\n` +
-            `Освещ.: ${pct}% / возраст: ${ageText} сут.\n` +
-            `Удлинение: ${elongDeg}°\n` +
-            `До ${apsisName}: ${daysText} дн`;
-
-          // Right panel: zodiac + events
-          st.tbMoonInfoTitleRight.text = `Зодиак / события`;
-          const events = st.moonEventsText ?? '';
-          st.tbMoonInfoBodyRight.text =
-            `Луна (trop): ${ZODIAC_GLYPH[ziMoonT] ?? '•'} ${ZODIAC_RU[ziMoonT] ?? '—'}\n` +
-            `Луна (sid):  ${ZODIAC_GLYPH[ziMoonS] ?? '•'} ${ZODIAC_RU[ziMoonS] ?? '—'}\n` +
-            `Солнце (t/s): ${ZODIAC_GLYPH[ziSunT] ?? '•'} ${ZODIAC_RU[ziSunT] ?? '—'} / ${ZODIAC_GLYPH[ziSunS] ?? '•'} ${ZODIAC_RU[ziSunS] ?? '—'}\n` +
-            `Узел: ${nodeDeg}°, Перигей: ${perDeg}°\n` +
-            (events ? `\n${events}` : '');
-        }
       }
 
       // ✅ QUANTUM TIME LABEL — обновляем раз в минуту, расчёт вне кадра (легковесный)
@@ -1700,13 +1778,64 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
       }
 
       // ✅ Moon events (zodiac/lunar) — update once per minute, compute off-frame, only in moon mode
-      if (sceneStateRef.current.cameraTarget === 'moon' &&
-        sceneStateRef.current.lastMoonEventsMinute !== currentMinute &&
-        !sceneStateRef.current.isMoonEventsComputing &&
+      const st = sceneStateRef.current;
+      if (st.cameraTarget === 'moon' &&
+        st.lastMoonEventsMinute !== currentMinute &&
+        !st.isMoonEventsComputing &&
         wasmModule) {
-        sceneStateRef.current.lastMoonEventsMinute = currentMinute;
-        sceneStateRef.current.isMoonEventsComputing = true;
+        st.lastMoonEventsMinute = currentMinute;
+        st.isMoonEventsComputing = true;
         const snapshot = nowEpochMs;
+        // ✅ Moon info panels text update (once per minute; UI only)
+        if (st.tbMoonInfoTitleLeft && st.tbMoonInfoBodyLeft
+          && st.tbMoonInfoTitleRight && st.tbMoonInfoBodyRight
+        ) {
+          const ziMoonT = st.moonZodiacTropical ?? 0;
+          const ziMoonS = st.moonZodiacSidereal ?? 0;
+          const ziSunT = st.sunZodiacTropical ?? 0;
+          const ziSunS = st.sunZodiacSidereal ?? 0;
+          const illum = st.moonIllumFrac ?? 0;
+          const phase8 = st.moonPhase8 ?? 0;
+          const phaseName = MOON_PHASE8_RU[phase8] ?? '—';
+          const pct = Math.max(0, Math.min(100, Math.round(illum * 100)));
+          const toDeg = (rad: number) => (rad * 180 / Math.PI);
+
+          const elongDeg = toDeg(st.moonElongRad ?? 0).toFixed(1);
+          const distKm = Math.round(st.moonDistKm ?? 0).toLocaleString('ru-RU');
+          const ageDays = (st.moonAgeDays ?? Number.NaN);
+          const ageText = Number.isFinite(ageDays) ? ageDays.toFixed(2) : '—';
+
+          // Determine whether distance is currently decreasing (heading to perigee) or increasing (heading to apogee)
+          const prevDist = st.prevMoonDistKm ?? Number.NaN;
+          const curDist = st.moonDistKm ?? Number.NaN;
+          const headingToPerigee = Number.isFinite(prevDist) && Number.isFinite(curDist) ? (curDist < prevDist) : true;
+          const nowJD = JULIAN_DAY_UNIX_EPOCH + nowEpochMs / 86400000.0;
+          const targetJD = headingToPerigee ? (st.nextMoonPerigeeUtcJD ?? Number.NaN) : (st.nextMoonApogeeUtcJD ?? Number.NaN);
+          const daysToTarget = Number.isFinite(targetJD) ? (targetJD - nowJD) : Number.NaN;
+          const daysText = Number.isFinite(daysToTarget) ? Math.max(0, daysToTarget).toFixed(2) : '—';
+          const apsisName = headingToPerigee ? 'перигея' : 'апогея';
+
+          // Left panel: human-friendly "now"
+          const nowUtc = new Date(nowEpochMs).toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
+          const apsisEmoji = headingToPerigee ? '⬇️' : '⬆️';
+          st.tbMoonInfoTitleLeft.text = `🌙 ${phaseName} • ${pct}%`;
+          st.tbMoonInfoBodyLeft.text =
+            `Сейчас: ${nowUtc}\n\n` +
+            `Возраст Луны: ${ageText} суток\n` +
+            `Освещённость: ${pct}%\n` +
+            `Расстояние до Земли: ${distKm} км\n` +
+            `Угол к Солнцу: ${elongDeg}°\n\n` +
+            `${apsisEmoji} До ${apsisName}: ${daysText} дн.`;
+
+          // Right panel: zodiac + events (human readable)
+          st.tbMoonInfoTitleRight.text = `✨ Зодиак и события`;
+          const events = st.moonEventsText ?? '';
+          st.tbMoonInfoBodyRight.text =
+            `Знак Луны (троп): ${ZODIAC_GLYPH[ziMoonT] ?? '•'} ${ZODIAC_RU[ziMoonT] ?? '—'}\n` +
+            `Знак Луны (сид):  ${ZODIAC_GLYPH[ziMoonS] ?? '•'} ${ZODIAC_RU[ziMoonS] ?? '—'}\n` +
+            `Солнце: ${ZODIAC_GLYPH[ziSunT] ?? '•'} ${ZODIAC_RU[ziSunT] ?? '—'} / ${ZODIAC_GLYPH[ziSunS] ?? '•'} ${ZODIAC_RU[ziSunS] ?? '—'}\n\n` +
+            (events ? events : 'События: —');
+        }
         if ((window as any).requestIdleCallback) {
           (window as any).requestIdleCallback(() => computeMoonEvents(snapshot, wasmModule));
         } else {
@@ -1715,44 +1844,46 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
       }
 
       // ✅ Moon info 3D panels visibility (only in moon camera mode)
-      const wantMoonPanels = sceneStateRef.current.cameraTarget === 'moon';
-      const leftPlane = sceneStateRef.current.moonInfoPlaneLeft;
-      const rightPlane = sceneStateRef.current.moonInfoPlaneRight;
+      const stPanels = sceneStateRef.current;
+      const wantMoonPanels = stPanels.cameraTarget === 'moon';
+      const leftPlane = stPanels.moonInfoPlaneLeft;
+      const rightPlane = stPanels.moonInfoPlaneRight;
       if (leftPlane && rightPlane) {
-        // Avoid per-frame churn: only toggle when needed
-        if (wantMoonPanels !== leftPlane.isVisible) {
+        // In Moon view: keep both panels visible.
+        // Focus mode only moves the clicked panel; the other stays visible and fixed in place.
+        const wantLeft = wantMoonPanels;
+        const wantRight = wantMoonPanels;
+
+        // Avoid per-frame churn: only toggle when needed (per-plane; prevents focus thrash)
+        if (wantLeft !== leftPlane.isVisible || wantRight !== rightPlane.isVisible) {
           const applyVisible = (plane: Mesh, visible: boolean) => {
             if (visible) {
+              // Enable whole subtree (panel box + GUI face).
+              // NOTE: Do NOT run a generic "pop to scale=1" animation here, because panel scaling is
+              // computed dynamically (pixels→world) and a transient scale=1 near the camera looks like
+              // the panel is flying from the camera and can tank FPS (huge near-plane quad).
+              plane.setEnabled(true);
               plane.isVisible = true;
-              plane.scaling.setAll(0.001);
-              // Simple “pop” without allocations: just lerp scaling for ~10 frames
-              let t = 0;
-              const obs = scene.onBeforeRenderObservable.add(() => {
-                t += 1;
-                const s = Math.min(1, t / 10);
-                const k = 0.001 + (1.0 - 0.001) * s;
-                plane.scaling.setAll(k);
-                if (s >= 1) {
-                  scene.onBeforeRenderObservable.remove(obs);
-                }
-              });
             } else {
               plane.isVisible = false;
+              // Disable whole subtree (panel box + GUI face) so it truly disappears in Earth view
+              plane.setEnabled(false);
             }
           };
-          applyVisible(leftPlane, wantMoonPanels);
-          applyVisible(rightPlane, wantMoonPanels);
+          if (wantLeft !== leftPlane.isVisible) applyVisible(leftPlane, wantLeft);
+          if (wantRight !== rightPlane.isVisible) applyVisible(rightPlane, wantRight);
         }
       }
 
       // ✅ Moon panels layout: keep panels adjacent to the visible lunar disk for any zoom + mobile portrait.
       // No allocations: use only primitive math + Babylon helpers.
-      // Skip layout updates when a panel is focused (prevents "flying away" effect)
-      if (wantMoonPanels && leftPlane && rightPlane && leftPlane.isVisible && rightPlane.isVisible && !sceneStateRef.current.moonPanelFocus) {
+      // Focus mode: update ONLY the non-focused panel here (focused one is controlled by the focus block below).
+      if (wantMoonPanels && leftPlane && rightPlane && leftPlane.isVisible && rightPlane.isVisible) {
         const st = sceneStateRef.current;
         const cam = st.camera;
         const moon = st.celestialMeshes.get('moon');
         if (cam && moon) {
+          const focus = st.moonPanelFocus;
           const w = engine.getRenderWidth(true);
           const h = engine.getRenderHeight(true);
           const isPortrait = h > w;
@@ -1762,7 +1893,7 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
           const moonWorld = moon.getAbsolutePosition();
           const transform = scene.getTransformMatrix();
           Vector3.ProjectToRef(moonWorld, panelIdentityMatrix, transform, panelViewport, panelTmp0);
-          const moonScreen = panelTmp0;
+          // moonScreenX/Y/Z stored in panelTmp0, used indirectly below
 
           // Moon radius in pixels
           const rWorld = moon.getBoundingInfo().boundingSphere.radiusWorld;
@@ -1773,95 +1904,215 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
           panelTmp3.copyFrom(moonWorld);
           panelTmp3.addInPlace(panelTmp2);
           Vector3.ProjectToRef(panelTmp3, panelIdentityMatrix, transform, panelViewport, panelTmp3);
-          const moonRadiusPx = Math.max(8, Math.abs(panelTmp3.x - moonScreen.x));
+          // moonRadiusPx used only for offset calculation below
 
-          const padPx = 14;
-          const margin = 10;
-          // Smaller, mobile-friendly panels (about ~half previous width)
-          const panelW = Math.min(260, Math.max(200, Math.floor(w * (isPortrait ? 0.72 : 0.22))));
-          const panelH = Math.min(180, Math.max(130, Math.floor(h * 0.19)));
-
-          const cx = moonScreen.x;
-          const cy = moonScreen.y;
-
-          // Default: landscape left/right
-          let aCx = cx - (moonRadiusPx + margin + panelW / 2);
-          let bCx = cx + (moonRadiusPx + margin + panelW / 2);
-          let aCy = cy;
-          let bCy = cy;
-
-          // Fallback: portrait or not enough room → top/bottom
-          const fitsHorizontal =
-            (aCx - panelW / 2) > padPx && (bCx + panelW / 2) < (w - padPx);
-          if (isPortrait || !fitsHorizontal) {
-            aCx = cx;
-            bCx = cx;
-            aCy = cy - (moonRadiusPx + margin + panelH / 2);
-            bCy = cy + (moonRadiusPx + margin + panelH / 2);
-          }
-
-          const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
-          aCx = clamp(aCx, padPx + panelW / 2, w - padPx - panelW / 2);
-          bCx = clamp(bCx, padPx + panelW / 2, w - padPx - panelW / 2);
-          aCy = clamp(aCy, padPx + panelH / 2, h - padPx - panelH / 2);
-          bCy = clamp(bCy, padPx + panelH / 2, h - padPx - panelH / 2);
-
-          // Assign “left” panel to the smaller screen-X (prevents left/right swap edge-cases)
-          const aIsLeft = aCx <= bCx;
-          const lCx = aIsLeft ? aCx : bCx;
-          const lCy = aIsLeft ? aCy : bCy;
-          const rCx = aIsLeft ? bCx : aCx;
-          const rCy = aIsLeft ? bCy : aCy;
-
-          // Use Moon depth so panels feel in the same “layer”
-          const z = moonScreen.z;
           const view = cam.getViewMatrix();
           const proj = cam.getProjectionMatrix(true);
+          const camPos = cam.position;
 
-          panelTmp1.set(lCx, lCy, z);
-          Vector3.UnprojectToRef(panelTmp1, w, h, panelIdentityMatrix, view, proj, panelTmp1);
-          panelTmp2.set(rCx, rCy, z);
-          Vector3.UnprojectToRef(panelTmp2, w, h, panelIdentityMatrix, view, proj, panelTmp2);
-          leftPlane.position.copyFrom(panelTmp1);
-          rightPlane.position.copyFrom(panelTmp2);
+          // Panel size in pixels (for scale calculation)
+          const panelWBase = Math.min(260, Math.max(180, Math.floor(w * (isPortrait ? 0.68 : 0.20))));
+          const panelW = panelWBase;
 
-          // Scale planes to match panelW×panelH pixels at that depth (base plane is 80×40 world units)
-          panelTmp3.set(lCx, lCy, z);
-          Vector3.UnprojectToRef(panelTmp3, w, h, panelIdentityMatrix, view, proj, panelTmp3);
-          panelTmp0.set(lCx + 1, lCy, z);
-          Vector3.UnprojectToRef(panelTmp0, w, h, panelIdentityMatrix, view, proj, panelTmp0);
-          panelTmp2.set(lCx, lCy + 1, z);
-          Vector3.UnprojectToRef(panelTmp2, w, h, panelIdentityMatrix, view, proj, panelTmp2);
-          const worldPerPxX = Vector3.Distance(panelTmp3, panelTmp0);
-          const worldPerPxY = Vector3.Distance(panelTmp3, panelTmp2);
-          const desiredWorldW = worldPerPxX * panelW;
-          const desiredWorldH = worldPerPxY * panelH;
-          const sx = desiredWorldW / 80;
-          const sy = desiredWorldH / 40;
-          leftPlane.scaling.x = sx;
-          leftPlane.scaling.y = sy;
-          leftPlane.scaling.z = sx;
-          rightPlane.scaling.copyFrom(leftPlane.scaling);
+          // Position panels in WORLD SPACE relative to Moon
+          const moonRadiusWorld = rWorld;
 
-          // Orient + tilt for “wedge” 3D effect:
+          // Calculate world units per pixel at moon distance
+          const distCamToMoon = Vector3.Distance(camPos, moonWorld);
+          const fovVal = cam.fov;
+          const worldPerPx = (2 * distCamToMoon * Math.tan(fovVal / 2)) / h;
+
+          // Moon radius in pixels
+          const moonRadiusPx2 = moonRadiusWorld / worldPerPx;
+
+          // Panel offset in pixels: moon radius + small gap
+          // Allow panels to go to screen edges (only limit to not go off-screen)
+          const gapPx = 5; // small gap from moon edge
+          // Max offset = half screen minus panel half-width (so panel stays on screen)
+          const panelHalfW = 90; // approximate panel half-width in pixels
+          const maxOffsetPx = isPortrait
+            ? (h / 2 - panelHalfW) // panels above/below - limit by height
+            : (w / 2 - panelHalfW); // panels left/right - limit by width
+          // Desired offset: moon radius + small gap
+          const desiredOffsetPx = moonRadiusPx2 + gapPx;
+          const offsetPx = Math.min(desiredOffsetPx, maxOffsetPx);
+
+          // Convert back to world units
+          const panelOffset = offsetPx * worldPerPx;
+
+          // Camera right/up vectors for positioning
+          panelTmp3.set(1, 0, 0);
+          cam.getDirectionToRef(panelTmp3, panelTmp3); // camRight
+          panelTmp4.set(0, 1, 0);
+          cam.getDirectionToRef(panelTmp4, panelTmp4); // camUp
+
+          // Direction Moon→camera for forward offset (panels slightly in front)
+          panelTmp0.copyFrom(camPos);
+          panelTmp0.subtractInPlace(moonWorld);
+          panelTmp0.normalize();
+          const forwardOffset = moonRadiusWorld * 0.1;
+
+          // Rest positions in world space (relative to Moon)
+          if (isPortrait) {
+            // Portrait: panels above/below Moon
+            panelTmp1.copyFrom(moonWorld);
+            panelTmp1.x += panelTmp4.x * panelOffset + panelTmp0.x * forwardOffset;
+            panelTmp1.y += panelTmp4.y * panelOffset + panelTmp0.y * forwardOffset;
+            panelTmp1.z += panelTmp4.z * panelOffset + panelTmp0.z * forwardOffset;
+            panelTmp2.copyFrom(moonWorld);
+            panelTmp2.x -= panelTmp4.x * panelOffset - panelTmp0.x * forwardOffset;
+            panelTmp2.y -= panelTmp4.y * panelOffset - panelTmp0.y * forwardOffset;
+            panelTmp2.z -= panelTmp4.z * panelOffset - panelTmp0.z * forwardOffset;
+          } else {
+            // Landscape: panels left/right of Moon
+            panelTmp1.copyFrom(moonWorld);
+            panelTmp1.x -= panelTmp3.x * panelOffset - panelTmp0.x * forwardOffset;
+            panelTmp1.y -= panelTmp3.y * panelOffset - panelTmp0.y * forwardOffset;
+            panelTmp1.z -= panelTmp3.z * panelOffset - panelTmp0.z * forwardOffset;
+            panelTmp2.copyFrom(moonWorld);
+            panelTmp2.x += panelTmp3.x * panelOffset + panelTmp0.x * forwardOffset;
+            panelTmp2.y += panelTmp3.y * panelOffset + panelTmp0.y * forwardOffset;
+            panelTmp2.z += panelTmp3.z * panelOffset + panelTmp0.z * forwardOffset;
+          }
+
+          // Scale based on world-space sizing (distToPanel not needed for uniform scale)
+          const restS = (worldPerPx * panelW) / 80;
+          const restSx = restS;
+          const restSy = restS;
+
+          // Orient + tilt for "wedge" 3D effect:
           // - inner side stays visually closer to Moon
           // - outer vertical edge is slightly closer to camera (tilt around Y)
-          const camPos = cam.position;
-          // Force readable face (no mirrored backside) + wedge tilt (outer edge towards camera)
-          const orientPanel = (mesh: Mesh, tiltSign: number) => {
-            mesh.lookAt(camPos);
-            // Babylon's mesh forward can differ; ensure +Z faces camera (otherwise flip 180°)
-            panelTmp0.set(0, 0, 1);
-            mesh.getDirectionToRef(panelTmp0, panelTmp0);
-            panelTmp2.copyFrom(camPos);
-            panelTmp2.subtractInPlace(mesh.position);
-            if (Vector3.Dot(panelTmp0, panelTmp2) < 0) {
-              mesh.addRotation(0, Math.PI, 0);
+          const orientPanel = (mesh: Mesh, tiltSign: number, tilt01: number) => {
+            // Calculate direction from mesh to camera
+            panelTmp0.copyFrom(camPos);
+            panelTmp0.subtractInPlace(mesh.position);
+            const dist = panelTmp0.length();
+            if (dist < 1e-6) return;
+            panelTmp0.scaleInPlace(1 / dist); // forward (towards camera)
+
+            // Build orthonormal basis: right = worldUp × forward, up = forward × right
+            panelTmp3.set(0, 1, 0); // world up
+            Vector3.CrossToRef(panelTmp3, panelTmp0, panelTmp4); // right
+            panelTmp4.normalize();
+            Vector3.CrossToRef(panelTmp0, panelTmp4, panelTmp3); // up (orthogonal)
+            panelTmp3.normalize();
+
+            // Create quaternion that orients +Z towards camera
+            if (!mesh.rotationQuaternion) {
+              mesh.rotationQuaternion = new Quaternion();
             }
-            mesh.addRotation(0, tiltSign * 0.22, 0);
+            // Matrix from axes: right=X, up=Y, forward=Z (reuse panelOrientMatrix)
+            panelOrientMatrix.setRowFromFloats(0, panelTmp4.x, panelTmp4.y, panelTmp4.z, 0);
+            panelOrientMatrix.setRowFromFloats(1, panelTmp3.x, panelTmp3.y, panelTmp3.z, 0);
+            panelOrientMatrix.setRowFromFloats(2, panelTmp0.x, panelTmp0.y, panelTmp0.z, 0);
+            panelOrientMatrix.setRowFromFloats(3, 0, 0, 0, 1);
+            Quaternion.FromRotationMatrixToRef(panelOrientMatrix, mesh.rotationQuaternion);
+
+            // Apply tilt (wedge effect) - rotate around local Y (reuse panelTiltQuat)
+            const tilt = tiltSign * 0.22 * tilt01;
+            if (Math.abs(tilt) > 0.001) {
+              Quaternion.FromEulerAnglesToRef(0, tilt, 0, panelTiltQuat);
+              mesh.rotationQuaternion.multiplyInPlace(panelTiltQuat);
+            }
           };
-          orientPanel(leftPlane, -1);
-          orientPanel(rightPlane, 1);
+
+          // Intro animation: BOTH panels start in FOCUS position (like when clicked),
+          // then animate to their rest positions. Uses same logic as focus mode.
+          const introActive = Boolean(st.moonPanelsIntroActive) && !st.moonPanelsIntroDone && !focus;
+          if (introActive) {
+            const dur = st.moonPanelsIntroDurMs ?? 650;
+            if (!st.moonPanelsIntroStartMs) st.moonPanelsIntroStartMs = nowMs;
+            const t0 = st.moonPanelsIntroStartMs ?? nowMs;
+            const t = Math.min(1, Math.max(0, (nowMs - t0) / dur));
+
+            // Calculate FOCUS position (same as click-to-focus mode)
+            // Position: 1.5 moon radii from camera towards moon
+            const moonRadiusWorld = rWorld;
+            const camToMoonDist = Vector3.Distance(camPos, moonWorld);
+            const desiredFromCam = moonRadiusWorld * 1.5;
+            const maxFromCam = Math.max(0.05, camToMoonDist - (moonRadiusWorld * 0.6));
+            const fromCam = Math.min(desiredFromCam, maxFromCam);
+
+            // Direction from camera to moon
+            panelTmp0.copyFrom(moonWorld);
+            panelTmp0.subtractInPlace(camPos);
+            panelTmp0.normalize();
+
+            // focusPos = camPos + dirToMoon * fromCam
+            const focusPosX = camPos.x + panelTmp0.x * fromCam;
+            const focusPosY = camPos.y + panelTmp0.y * fromCam;
+            const focusPosZ = camPos.z + panelTmp0.z * fromCam;
+
+            // Calculate FOCUS scale (same as click-to-focus mode)
+            panelTmp3.set(focusPosX, focusPosY, focusPosZ);
+            Vector3.ProjectToRef(panelTmp3, panelIdentityMatrix, transform, panelViewport, panelTmp4);
+            const zFocus = panelTmp4.z;
+
+            panelTmp3.set(w * 0.5, h * 0.5, zFocus);
+            Vector3.UnprojectToRef(panelTmp3, w, h, panelIdentityMatrix, view, proj, panelTmp3);
+            panelTmp4.set(w * 0.5 + 1, h * 0.5, zFocus);
+            Vector3.UnprojectToRef(panelTmp4, w, h, panelIdentityMatrix, view, proj, panelTmp4);
+            const worldPerPxX = Vector3.Distance(panelTmp3, panelTmp4);
+
+            const edgePad = 50;
+            const maxWpx = w - edgePad * 2;
+            const maxHpx = h - edgePad * 2;
+            const focusWpx = Math.max(280, Math.min(maxWpx, maxHpx / 0.75));
+            const focusScale = (worldPerPxX * focusWpx) / 80;
+
+            // Separation for two panels side by side at focus position
+            const sepWorld = worldPerPxX * 20; // Small gap between panels
+            panelTmp5.set(1, 0, 0);
+            cam.getDirectionToRef(panelTmp5, panelTmp5); // camera-right
+
+            // Start positions (focus, side by side)
+            const startLeftX = focusPosX - panelTmp5.x * sepWorld;
+            const startLeftY = focusPosY - panelTmp5.y * sepWorld;
+            const startLeftZ = focusPosZ - panelTmp5.z * sepWorld;
+            const startRightX = focusPosX + panelTmp5.x * sepWorld;
+            const startRightY = focusPosY + panelTmp5.y * sepWorld;
+            const startRightZ = focusPosZ + panelTmp5.z * sepWorld;
+
+            // Lerp position: focus → rest
+            leftPlane.position.set(
+              startLeftX + (panelTmp1.x - startLeftX) * t,
+              startLeftY + (panelTmp1.y - startLeftY) * t,
+              startLeftZ + (panelTmp1.z - startLeftZ) * t
+            );
+            rightPlane.position.set(
+              startRightX + (panelTmp2.x - startRightX) * t,
+              startRightY + (panelTmp2.y - startRightY) * t,
+              startRightZ + (panelTmp2.z - startRightZ) * t
+            );
+
+            // Lerp scale: focus → rest
+            const kx = focusScale + (restSx - focusScale) * t;
+            const ky = focusScale + (restSy - focusScale) * t;
+            leftPlane.scaling.set(kx, ky, kx);
+            rightPlane.scaling.set(kx, ky, kx);
+
+            // Orientation: start facing camera (tilt=0), end with tilt
+            orientPanel(leftPlane, -1, t);
+            orientPanel(rightPlane, 1, t);
+
+            if (t >= 1) {
+              st.moonPanelsIntroActive = false;
+              st.moonPanelsIntroDone = true;
+            }
+          } else {
+            // Rest mode (or focus mode for the non-focused panel)
+            if (!focus || focus !== 'left') {
+              leftPlane.position.copyFrom(panelTmp1);
+              leftPlane.scaling.set(restSx, restSy, restSx);
+              orientPanel(leftPlane, -1, 1);
+            }
+            if (!focus || focus !== 'right') {
+              rightPlane.position.copyFrom(panelTmp2);
+              rightPlane.scaling.set(restSx, restSy, restSx);
+              orientPanel(rightPlane, 1, 1);
+            }
+          }
         }
       }
 
@@ -1873,11 +2124,9 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
         const lp = st.moonInfoPlaneLeft;
         const rp = st.moonInfoPlaneRight;
         if (wantMoonPanels && cam && moon && lp && rp) {
-          // When focused, hide the other panel and lock the focused one in “reading mode”
+          // When focused, lock the focused one in “reading mode”
           if (st.moonPanelFocus) {
             const focused = st.moonPanelFocus === 'left' ? lp : rp;
-            const other = st.moonPanelFocus === 'left' ? rp : lp;
-            other.isVisible = false;
 
             // If animation active, lerp transform
             if (st.moonPanelAnimActive && st.moonPanelAnimStartMs && st.moonPanelAnimDurMs) {
@@ -1889,7 +2138,11 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
                 Vector3.LerpToRef(st.moonPanelFromScale, st.moonPanelToScale, t, focused.scaling);
               }
               if (st.moonPanelFromRot && st.moonPanelToRot) {
-                if (!focused.rotationQuaternion) focused.rotationQuaternion = Quaternion.Identity();
+                // rotationQuaternion must exist while animating; if missing, derive it from current Euler rotation.
+                if (!focused.rotationQuaternion) {
+                  focused.rotationQuaternion = new Quaternion();
+                  Quaternion.FromEulerAnglesToRef(focused.rotation.x, focused.rotation.y, focused.rotation.z, focused.rotationQuaternion);
+                }
                 Quaternion.SlerpToRef(st.moonPanelFromRot, st.moonPanelToRot, t, focused.rotationQuaternion);
               }
               if (t >= 1) {
@@ -1898,10 +2151,83 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
                 if (st.moonPanelReturningToRest) {
                   st.moonPanelReturningToRest = false;
                   st.moonPanelFocus = null;
-                  // both panels will reappear via visibility + layout paths
-                  lp.isVisible = true;
-                  rp.isVisible = true;
+                  // Convert back to Euler rotation so runtime layout (which uses Euler ops) stays consistent.
+                  try {
+                    if (lp.rotationQuaternion) {
+                      lp.rotationQuaternion.toEulerAnglesToRef(lp.rotation);
+                      lp.rotationQuaternion = null;
+                    }
+                    if (rp.rotationQuaternion) {
+                      rp.rotationQuaternion.toEulerAnglesToRef(rp.rotation);
+                      rp.rotationQuaternion = null;
+                    }
+                  } catch {
+                    // ignore
+                  }
                 }
+              }
+            } else if (!st.moonPanelReturningToRest) {
+              // Focus mode (after the click animation):
+              // - keep the panel at a fixed world distance from the camera (~1.5 Moon radii)
+              // - keep the panel pixel size stable even when the user wheel-zooms
+              const w = engine.getRenderWidth(true);
+              const h = engine.getRenderHeight(true);
+              panelViewport.width = w;
+              panelViewport.height = h;
+
+              const moonWorld = moon.getAbsolutePosition();
+              const camPos = cam.position;
+              // camera→moon
+              panelTmp0.copyFrom(moonWorld);
+              panelTmp0.subtractInPlace(camPos);
+              const camToMoon = panelTmp0.length();
+              if (camToMoon > 1e-6) {
+                panelTmp0.scaleInPlace(1 / camToMoon); // dirToMoon
+                const moonRadiusWorld = moon.getBoundingInfo().boundingSphere.radiusWorld;
+                const desiredFromCam = moonRadiusWorld * 1.5;
+                const maxFromCam = Math.max(0.05, camToMoon - (moonRadiusWorld * 0.6));
+                const fromCam = Math.min(desiredFromCam, maxFromCam);
+
+                // focusPos = camPos + dirToMoon * fromCam
+                panelTmp1.copyFrom(panelTmp0);
+                panelTmp1.scaleInPlace(fromCam);
+                panelTmp1.addInPlace(camPos);
+                focused.position.copyFrom(panelTmp1);
+
+                // Compute px→world scale at the current focus depth
+                const transform = scene.getTransformMatrix();
+                Vector3.ProjectToRef(focused.position, panelIdentityMatrix, transform, panelViewport, panelTmp2);
+                const zFocus = panelTmp2.z;
+                const view = cam.getViewMatrix();
+                const proj = cam.getProjectionMatrix(true);
+
+                panelTmp3.set(w * 0.5, h * 0.5, zFocus);
+                Vector3.UnprojectToRef(panelTmp3, w, h, panelIdentityMatrix, view, proj, panelTmp3);
+                panelTmp4.set(w * 0.5 + 1, h * 0.5, zFocus);
+                Vector3.UnprojectToRef(panelTmp4, w, h, panelIdentityMatrix, view, proj, panelTmp4);
+                panelTmp5.set(w * 0.5, h * 0.5 + 1, zFocus);
+                Vector3.UnprojectToRef(panelTmp5, w, h, panelIdentityMatrix, view, proj, panelTmp5);
+                const worldPerPxX = Vector3.Distance(panelTmp3, panelTmp4);
+
+                // Focus mode: panel fills the constraining dimension
+                // Landscape: panel fills height (to edges), width proportional (4:3)
+                // Portrait: panel fills width (to edges), height proportional (more square ~1:1)
+                const isPortraitFocus = h > w;
+                const edgePad = isPortraitFocus ? 25 : 50;
+
+                // Both orientations need padding on all edges
+                const maxWpx = w - edgePad * 2;
+                const maxHpx = h - edgePad * 2;
+
+                // Panel base is 80x60 world units (4:3 ratio)
+                // Portrait: use more square ratio (height = width * 0.9 instead of 0.75)
+                // Landscape: keep 4:3 ratio (height = width * 0.75)
+                const aspectRatio = isPortraitFocus ? 0.9 : 0.75;
+                const focusWpx = Math.max(280, Math.min(maxWpx, maxHpx / aspectRatio));
+                // Uniform scale to preserve aspect ratio
+                const sx = (worldPerPxX * focusWpx) / 80;
+                const sy = sx;
+                focused.scaling.set(sx, sy, sx);
               }
             }
           }
@@ -1953,17 +2279,23 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
   const pivotRotationQuat = useMemo(() => new Quaternion(), []);
   const rollRotationQuat = useMemo(() => new Quaternion(), []);
   const finalRotationQuat = useMemo(() => new Quaternion(), []);
+  // moonFaceYawOffsetQuat removed (unused; yaw applied inline via pivotRotationQuat)
   const eNorthLocalVec = useMemo(() => Vector3.Zero(), []);
   const eNorthWorldVec = useMemo(() => Vector3.Zero(), []);
   const uProjVec = useMemo(() => Vector3.Zero(), []);
   const rotMatrix = useMemo(() => Matrix.Identity(), []);
   // Moon panel placement scratch (avoid allocations in moon-mode layout)
   const panelIdentityMatrix = useMemo(() => Matrix.Identity(), []);
+  const panelOrientMatrix = useMemo(() => Matrix.Identity(), []); // for orientPanel
   const panelViewport = useMemo(() => ({ x: 0, y: 0, width: 1, height: 1 } as any), []);
   const panelTmp0 = useMemo(() => Vector3.Zero(), []); // screen/world scratch
   const panelTmp1 = useMemo(() => Vector3.Zero(), []);
   const panelTmp2 = useMemo(() => Vector3.Zero(), []);
   const panelTmp3 = useMemo(() => Vector3.Zero(), []);
+  const panelTmp4 = useMemo(() => Vector3.Zero(), []);
+  const panelTmp5 = useMemo(() => Vector3.Zero(), []);
+  const panelTiltQuat = useMemo(() => new Quaternion(), []); // for tilt in orientPanel
+  const earthInvQuat = useMemo(() => new Quaternion(), []); // for Earth yaw correction (avoid allocation)
 
   // Compute sublunar lat/lon (deg) from current WASM buffer and JD using mean obliquity and apparent sidereal time
   // Removed computeSublunarLatLonDeg; now using pre-computed values from WASM STATE
@@ -2191,8 +2523,8 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
         uProjVec.normalize();
         // Signed angle between eNorthWorldVec and uProjVec around axis targetDir
         const dotNu = Math.min(1, Math.max(-1, Vector3.Dot(eNorthWorldVec, uProjVec)));
-        const crossNu = Vector3.Cross(eNorthWorldVec, uProjVec);
-        const sign = Vector3.Dot(crossNu, targetDirVector) >= 0 ? 1 : -1;
+        Vector3.CrossToRef(eNorthWorldVec, uProjVec, crossAxisVector); // reuse crossAxisVector for crossNu
+        const sign = Vector3.Dot(crossAxisVector, targetDirVector) >= 0 ? 1 : -1;
         const beta = Math.acos(dotNu) * sign;
         Quaternion.RotationAxisToRef(targetDirVector, beta, rollRotationQuat);
         // Final rotation: roll * align → normalize to ensure unit quaternion (critical for inverse)
@@ -2214,16 +2546,16 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
         // Result reused for sublunar marker below (no extra WASM calls).
         {
           const q = sceneState.earthPivot.rotationQuaternion!;
-          const invQ = new Quaternion(-q.x, -q.y, -q.z, q.w);
-          const n = Math.hypot(invQ.x, invQ.y, invQ.z, invQ.w);
-          if (n > 0) { invQ.x /= n; invQ.y /= n; invQ.z /= n; invQ.w /= n; }
+          earthInvQuat.set(-q.x, -q.y, -q.z, q.w);
+          const n = Math.hypot(earthInvQuat.x, earthInvQuat.y, earthInvQuat.z, earthInvQuat.w);
+          if (n > 0) { earthInvQuat.x /= n; earthInvQuat.y /= n; earthInvQuat.z /= n; earthInvQuat.w /= n; }
           // world Sun dir (from Earth to origin)
           uProjVec.set(
             -sceneState.earthPivot.position.x,
             -sceneState.earthPivot.position.y,
             -sceneState.earthPivot.position.z
           ).normalize();
-          Matrix.FromQuaternionToRef(invQ, rotMatrix);
+          Matrix.FromQuaternionToRef(earthInvQuat, rotMatrix);
           // localSunDir -> store in eNorthLocalVec
           Vector3.TransformCoordinatesToRef(uProjVec, rotMatrix, eNorthLocalVec).normalize();
           // red zenith local dir already in zenithLocalVector
@@ -2244,6 +2576,11 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
         const rUnits = moonDistanceAu * MOON_UNITS_PER_AU;
         const moonMesh = sceneState.celestialMeshes.get('moon');
 
+        // ✅ Sync moonPivot POSITION first so Moon absolute position is correct for lookAt/orientation
+        if (sceneState.earthPivot) {
+          sceneState.moonPivot.position.copyFrom(sceneState.earthPivot.position);
+        }
+
         // Use pre-computed sublunar data from WASM
         const latRad = sublunarLatRad;
         const lonRad = sublunarLonRad;
@@ -2262,13 +2599,31 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
             Vector3.TransformCoordinatesToRef(zenithLocalVector, rotMatrix, targetDirVector);
             targetDirVector.normalize().scaleInPlace(rUnits);
             moonMesh.position.copyFrom(targetDirVector);
+
+            // ✅ Tidal lock: Moon always faces Earth
+            const earthWorldPos = sceneState.earthPivot.position;
+            moonMesh.lookAt(earthWorldPos);
+
+            // Rotate 180° so maria (near side) faces Earth instead of far side
+            if (!moonMesh.rotationQuaternion) {
+              moonMesh.rotationQuaternion = Quaternion.FromEulerAngles(
+                moonMesh.rotation.x,
+                moonMesh.rotation.y,
+                moonMesh.rotation.z
+              );
+            } else {
+              Quaternion.FromEulerAnglesToRef(
+                moonMesh.rotation.x,
+                moonMesh.rotation.y,
+                moonMesh.rotation.z,
+                moonMesh.rotationQuaternion
+              );
+            }
+            Quaternion.RotationYawPitchRollToRef(-Math.PI / 2, 0, 0, pivotRotationQuat);
+            moonMesh.rotationQuaternion.multiplyInPlace(pivotRotationQuat);
           }
         }
-        // ✅ Sync moonPivot POSITION only (keep geocentric vector in inertial ecliptic frame)
-        if (sceneState.moonPivot && sceneState.earthPivot) {
-          sceneState.moonPivot.position.copyFrom(sceneState.earthPivot.position);
-          // Do not rotate moonPivot; keep lunar vector inertial
-        }
+        // Do not rotate moonPivot; keep lunar vector inertial
 
         // ✅ Place sublunar (lunar zenith) marker using the same sublunar coords
         if (sceneState.lunarZenithMarker && sceneState.earthPivot) {
@@ -2328,67 +2683,249 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
     }
   }, []);
 
+  // ✅ OPTIMIZED: Staggered off-frame computation with caching
+  // 1. First call (init): compute ALL heavy functions at once
+  // 2. Subsequent calls: compute only ONE expired cache entry per minute (round-robin)
+  // Cache validity: 10 minutes (data changes slowly: phases ~7 days, apsides ~27 days)
+  const MOON_EVENTS_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
   const computeMoonEvents = useCallback((nowEpochMs: number, wasm: WASMModule): void => {
     try {
       const nowJD = JULIAN_DAY_UNIX_EPOCH + nowEpochMs / 86400000.0;
+      const st = sceneStateRef.current;
+
+      // Initialize cache if needed
+      if (!st.moonEventsCache) {
+        st.moonEventsCache = {};
+      }
+      const cache = st.moonEventsCache;
+
+      // Helper: check if cache entry is valid
+      const isCacheValid = (entry: { computedAt: number } | undefined): boolean => {
+        if (!entry) return false;
+        return (nowEpochMs - entry.computedAt) < MOON_EVENTS_CACHE_TTL_MS;
+      };
+
+      // First run detection: if no cache entries exist, compute ALL
+      const isFirstRun = !cache.phases && !cache.nodes && !cache.apsides && !cache.age && !cache.eclipse && !cache.voc;
+
+      if (isFirstRun) {
+        // ✅ INIT: compute all heavy functions once
+        const nextNew = wasm.next_moon_phase_from(nowJD, 0);
+        const nextFirst = wasm.next_moon_phase_from(nowJD, 1);
+        const nextFull = wasm.next_moon_phase_from(nowJD, 2);
+        const nextLast = wasm.next_moon_phase_from(nowJD, 3);
+        cache.phases = { jd: nowJD, data: [nextNew, nextFirst, nextFull, nextLast], computedAt: nowEpochMs };
+
+        const nodesPtr = wasm.next_moon_nodes_from(nowJD);
+        if (nodesPtr) {
+          const view = new Float64Array(wasm.memory.buffer, nodesPtr, 2);
+          cache.nodes = { jd: nowJD, data: [view[0]!, view[1]!], computedAt: nowEpochMs };
+        }
+
+        const apsPtr = wasm.next_moon_apsides_from(nowJD);
+        if (apsPtr) {
+          const view = new Float64Array(wasm.memory.buffer, apsPtr, 2);
+          cache.apsides = { jd: nowJD, data: [view[0]!, view[1]!], computedAt: nowEpochMs };
+          st.nextMoonPerigeeUtcJD = view[0]!;
+          st.nextMoonApogeeUtcJD = view[1]!;
+        }
+
+        const agePtr = wasm.moon_age_and_phase4(nowJD);
+        if (agePtr) {
+          const view = new Float64Array(wasm.memory.buffer, agePtr, 2);
+          cache.age = { jd: nowJD, data: [view[0]!, view[1]!], computedAt: nowEpochMs };
+          st.moonAgeDays = view[0]!;
+          st.moonPhase4Id = Math.trunc(view[1] ?? 0);
+        }
+
+        const eclipsePtr = wasm.next_eclipse_from(nowJD);
+        if (eclipsePtr) {
+          const view = new Float64Array(wasm.memory.buffer, eclipsePtr, 2);
+          cache.eclipse = { jd: nowJD, data: [view[0]!, view[1]!], computedAt: nowEpochMs };
+        }
+
+        const vocVal = wasm.is_moon_void_of_course(nowJD);
+        cache.voc = { jd: nowJD, data: vocVal, computedAt: nowEpochMs };
+
+      } else {
+        // ✅ SUBSEQUENT: compute only ONE expired entry per minute (round-robin)
+        // Find first expired cache entry and update it
+        const slot = (st.moonEventsStaggerSlot ?? 0) % 6;
+        st.moonEventsStaggerSlot = slot + 1;
+
+        // Only compute if this slot's cache is expired
+        if (slot === 0 && !isCacheValid(cache.phases)) {
+          const nextNew = wasm.next_moon_phase_from(nowJD, 0);
+          const nextFirst = wasm.next_moon_phase_from(nowJD, 1);
+          const nextFull = wasm.next_moon_phase_from(nowJD, 2);
+          const nextLast = wasm.next_moon_phase_from(nowJD, 3);
+          cache.phases = { jd: nowJD, data: [nextNew, nextFirst, nextFull, nextLast], computedAt: nowEpochMs };
+        }
+
+        if (slot === 1 && !isCacheValid(cache.nodes)) {
+          const nodesPtr = wasm.next_moon_nodes_from(nowJD);
+          if (nodesPtr) {
+            const view = new Float64Array(wasm.memory.buffer, nodesPtr, 2);
+            cache.nodes = { jd: nowJD, data: [view[0]!, view[1]!], computedAt: nowEpochMs };
+          }
+        }
+
+        if (slot === 2 && !isCacheValid(cache.apsides)) {
+          const apsPtr = wasm.next_moon_apsides_from(nowJD);
+          if (apsPtr) {
+            const view = new Float64Array(wasm.memory.buffer, apsPtr, 2);
+            cache.apsides = { jd: nowJD, data: [view[0]!, view[1]!], computedAt: nowEpochMs };
+            st.nextMoonPerigeeUtcJD = view[0]!;
+            st.nextMoonApogeeUtcJD = view[1]!;
+          }
+        }
+
+        if (slot === 3 && !isCacheValid(cache.age)) {
+          const agePtr = wasm.moon_age_and_phase4(nowJD);
+          if (agePtr) {
+            const view = new Float64Array(wasm.memory.buffer, agePtr, 2);
+            cache.age = { jd: nowJD, data: [view[0]!, view[1]!], computedAt: nowEpochMs };
+            st.moonAgeDays = view[0]!;
+            st.moonPhase4Id = Math.trunc(view[1] ?? 0);
+          }
+        }
+
+        if (slot === 4 && !isCacheValid(cache.eclipse)) {
+          const eclipsePtr = wasm.next_eclipse_from(nowJD);
+          if (eclipsePtr) {
+            const view = new Float64Array(wasm.memory.buffer, eclipsePtr, 2);
+            cache.eclipse = { jd: nowJD, data: [view[0]!, view[1]!], computedAt: nowEpochMs };
+          }
+        }
+
+        if (slot === 5 && !isCacheValid(cache.voc)) {
+          const vocVal = wasm.is_moon_void_of_course(nowJD);
+          cache.voc = { jd: nowJD, data: vocVal, computedAt: nowEpochMs };
+        }
+      }
+
+      // Build display text from cache (use cached values even if stale — better than empty)
       const jdToIsoUtc = (jdUtc: number): string => {
         if (!Number.isFinite(jdUtc)) return '—';
         const ms = (jdUtc - JULIAN_DAY_UNIX_EPOCH) * 86400000.0;
-        // ISO string is always UTC
         return new Date(ms).toISOString().replace('T', ' ').slice(0, 16) + 'Z';
       };
 
-      // Phases (UTC JD)
-      const nextNew = wasm.next_moon_phase_from(nowJD, 0);
-      const nextFirst = wasm.next_moon_phase_from(nowJD, 1);
-      const nextFull = wasm.next_moon_phase_from(nowJD, 2);
-      const nextLast = wasm.next_moon_phase_from(nowJD, 3);
-
-      // Nodes ptr -> [asc, desc]
-      let nodesText = 'Узлы: —';
-      const nodesPtr = wasm.next_moon_nodes_from(nowJD);
-      if (nodesPtr) {
-        const view = new Float64Array(wasm.memory.buffer, nodesPtr, 2);
-        nodesText = `Узлы: ASC ${jdToIsoUtc(view[0]!)}, DESC ${jdToIsoUtc(view[1]!)}`;
+      // Phases text
+      let phasesText = 'Ближайшие фазы (UTC): —';
+      if (cache.phases) {
+        const [nextNew, nextFirst, nextFull, nextLast] = cache.phases.data;
+        phasesText =
+          `Ближайшие фазы (UTC):\n` +
+          `🌑 Новолуние — ${jdToIsoUtc(nextNew)}\n` +
+          `🌓 1-я четверть — ${jdToIsoUtc(nextFirst)}\n` +
+          `🌕 Полнолуние — ${jdToIsoUtc(nextFull)}\n` +
+          `🌗 Последняя четверть — ${jdToIsoUtc(nextLast)}`;
       }
 
-      // Apsides ptr -> [peri, apog]
-      let apsidesText = 'Апсиды: —';
-      const apsPtr = wasm.next_moon_apsides_from(nowJD);
-      if (apsPtr) {
-        const view = new Float64Array(wasm.memory.buffer, apsPtr, 2);
-        sceneStateRef.current.nextMoonPerigeeUtcJD = view[0]!;
-        sceneStateRef.current.nextMoonApogeeUtcJD = view[1]!;
-        apsidesText = `Апсиды: Peri ${jdToIsoUtc(view[0]!)}, Apo ${jdToIsoUtc(view[1]!)}`;
+      // Nodes text
+      let nodesText = 'Узлы орбиты (UTC): —';
+      if (cache.nodes) {
+        const [asc, desc] = cache.nodes.data;
+        nodesText =
+          `Узлы орбиты (UTC):\n` +
+          `☊ Восходящий — ${jdToIsoUtc(asc)}\n` +
+          `☋ Нисходящий — ${jdToIsoUtc(desc)}`;
       }
 
-      // Moon age (days since last New Moon) + current 4-phase id (off-frame helper)
-      const agePtr = wasm.moon_age_and_phase4(nowJD);
-      if (agePtr) {
-        const view = new Float64Array(wasm.memory.buffer, agePtr, 2);
-        sceneStateRef.current.moonAgeDays = view[0]!;
-        sceneStateRef.current.moonPhase4Id = Math.trunc(view[1] ?? 0);
+      // Apsides text
+      let apsidesText = 'Перигей / апогей (UTC): —';
+      if (cache.apsides) {
+        const [peri, apog] = cache.apsides.data;
+        st.nextMoonPerigeeUtcJD = peri;
+        st.nextMoonApogeeUtcJD = apog;
+        apsidesText =
+          `Перигей / апогей (UTC):\n` +
+          `⬇️ Перигей — ${jdToIsoUtc(peri)}\n` +
+          `⬆️ Апогей — ${jdToIsoUtc(apog)}`;
       }
 
-      // Eclipse ptr -> [jd, kind]
+      // Age (update state from cache)
+      if (cache.age) {
+        st.moonAgeDays = cache.age.data[0];
+        st.moonPhase4Id = Math.trunc(cache.age.data[1]);
+      }
+
+      // Eclipse text
       let eclipseText = 'Затмение: —';
-      const eclipsePtr = wasm.next_eclipse_from(nowJD);
-      if (eclipsePtr) {
-        const view = new Float64Array(wasm.memory.buffer, eclipsePtr, 2);
-        const kind = Math.trunc(view[1] ?? 0);
-        const kindText = kind === 1 ? 'Солнечное' : (kind === 2 ? 'Лунное' : '—');
-        eclipseText = `Затмение: ${kindText} ${jdToIsoUtc(view[0]!)}`;
+      if (cache.eclipse) {
+        const [jdEcl, kind] = cache.eclipse.data;
+        const kindNum = Math.trunc(kind);
+        const kindText = kindNum === 1 ? 'Солнечное' : (kindNum === 2 ? 'Лунное' : '—');
+        eclipseText = `Ближайшее затмение: ${kindText} — ${jdToIsoUtc(jdEcl)} (UTC)`;
       }
 
-      const voc = Math.trunc(wasm.is_moon_void_of_course(nowJD)) === 1;
-      const vocText = `VOC: ${voc ? 'ДА' : 'нет'}`;
+      // VOC text
+      let vocText = 'Луна без курса: —';
+      if (cache.voc) {
+        const voc = Math.trunc(cache.voc.data) === 1;
+        vocText = `Луна без курса: ${voc ? 'да' : 'нет'}`;
+      }
 
-      sceneStateRef.current.moonEventsText =
-        `След. фазы: New ${jdToIsoUtc(nextNew)}, 1Q ${jdToIsoUtc(nextFirst)}, Full ${jdToIsoUtc(nextFull)}, 3Q ${jdToIsoUtc(nextLast)}\n` +
-        `${nodesText}\n` +
-        `${apsidesText}\n` +
+      st.moonEventsText =
+        `${phasesText}\n\n` +
+        `${nodesText}\n\n` +
+        `${apsidesText}\n\n` +
         `${eclipseText}\n` +
         `${vocText}`;
+
+      // ✅ Update Moon panels immediately (don’t wait for the next minute tick)
+      try {
+        if (
+          st.cameraTarget === 'moon' &&
+          st.tbMoonInfoTitleLeft && st.tbMoonInfoBodyLeft &&
+          st.tbMoonInfoTitleRight && st.tbMoonInfoBodyRight
+        ) {
+          const ziMoonT = st.moonZodiacTropical ?? 0;
+          const ziMoonS = st.moonZodiacSidereal ?? 0;
+          const ziSunT = st.sunZodiacTropical ?? 0;
+          const ziSunS = st.sunZodiacSidereal ?? 0;
+          const illum = st.moonIllumFrac ?? 0;
+          const phase8 = st.moonPhase8 ?? 0;
+          const phaseName = MOON_PHASE8_RU[phase8] ?? '—';
+          const pct = Math.max(0, Math.min(100, Math.round(illum * 100)));
+          const toDeg = (rad: number) => (rad * 180 / Math.PI);
+          const elongDeg = toDeg(st.moonElongRad ?? 0).toFixed(1);
+          const distKm = Math.round(st.moonDistKm ?? 0).toLocaleString('ru-RU');
+          const ageDays = (st.moonAgeDays ?? Number.NaN);
+          const ageText = Number.isFinite(ageDays) ? ageDays.toFixed(2) : '—';
+
+          const prevDist = st.prevMoonDistKm ?? Number.NaN;
+          const curDist = st.moonDistKm ?? Number.NaN;
+          const headingToPerigee = Number.isFinite(prevDist) && Number.isFinite(curDist) ? (curDist < prevDist) : true;
+          const targetJD = headingToPerigee ? (st.nextMoonPerigeeUtcJD ?? Number.NaN) : (st.nextMoonApogeeUtcJD ?? Number.NaN);
+          const daysToTarget = Number.isFinite(targetJD) ? (targetJD - nowJD) : Number.NaN;
+          const daysText = Number.isFinite(daysToTarget) ? Math.max(0, daysToTarget).toFixed(2) : '—';
+          const apsisName = headingToPerigee ? 'перигея' : 'апогея';
+
+          const nowUtc = new Date(nowEpochMs).toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
+          const apsisEmoji = headingToPerigee ? '⬇️' : '⬆️';
+          st.tbMoonInfoTitleLeft.text = `🌙 ${phaseName} • ${pct}%`;
+          st.tbMoonInfoBodyLeft.text =
+            `Сейчас: ${nowUtc}\n\n` +
+            `Возраст Луны: ${ageText} суток\n` +
+            `Освещённость: ${pct}%\n` +
+            `Расстояние до Земли: ${distKm} км\n` +
+            `Угол к Солнцу: ${elongDeg}°\n\n` +
+            `${apsisEmoji} До ${apsisName}: ${daysText} дн.`;
+
+          st.tbMoonInfoTitleRight.text = `✨ Зодиак и события`;
+          const events = st.moonEventsText ?? '';
+          st.tbMoonInfoBodyRight.text =
+            `Знак Луны (троп): ${ZODIAC_GLYPH[ziMoonT] ?? '•'} ${ZODIAC_RU[ziMoonT] ?? '—'}\n` +
+            `Знак Луны (сид):  ${ZODIAC_GLYPH[ziMoonS] ?? '•'} ${ZODIAC_RU[ziMoonS] ?? '—'}\n` +
+            `Солнце: ${ZODIAC_GLYPH[ziSunT] ?? '•'} ${ZODIAC_RU[ziSunT] ?? '—'} / ${ZODIAC_GLYPH[ziSunS] ?? '•'} ${ZODIAC_RU[ziSunS] ?? '—'}\n\n` +
+            (events ? events : 'События: —');
+        }
+      } catch {
+        // ignore
+      }
     } catch {
       sceneStateRef.current.moonEventsText = '—';
     } finally {

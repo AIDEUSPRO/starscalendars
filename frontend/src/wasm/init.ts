@@ -50,6 +50,8 @@ export interface WASMModule {
   readonly compute_state: (julianDay: number) => number;
   readonly get_version: () => string;
   readonly memory: WebAssembly.Memory;
+  // Toggle extended STATE computations (slots 15..26) to avoid unnecessary zodiac/events math in Earth-view
+  readonly set_state_extended_enabled: (enabled: boolean) => void;
   readonly next_winter_solstice_from: (julianDayUtcStart: number) => number;
   // Lunar events / zodiac (off-frame helpers; derived events are computed over astro-rust outputs in WASM)
   readonly next_moon_phase_from: (julianDayUtcStart: number, phaseId: number) => number; // JD UTC
@@ -122,6 +124,7 @@ export const initializeWASM = async (): Promise<WASMModule> => {
       const next_eclipse_from_raw = (wrapper as unknown as { next_eclipse_from?: (jd: number) => number }).next_eclipse_from;
       const moon_age_and_phase4_raw = (wrapper as unknown as { moon_age_and_phase4?: (jd: number) => number }).moon_age_and_phase4;
       const is_moon_void_of_course_raw = (wrapper as unknown as { is_moon_void_of_course?: (jd: number) => number }).is_moon_void_of_course;
+      const set_state_extended_enabled_raw = (wrapper as unknown as { set_state_extended_enabled?: (enabled: boolean) => void }).set_state_extended_enabled;
       const get_version_fn = (wrapper as unknown as { get_version?: () => string }).get_version;
       const get_mean_obliquity_raw = (wrapper as unknown as { get_mean_obliquity?: (jd: number) => number }).get_mean_obliquity;
       const get_apparent_sidereal_time_raw = (wrapper as unknown as { get_apparent_sidereal_time?: (jd: number) => number }).get_apparent_sidereal_time;
@@ -141,6 +144,7 @@ export const initializeWASM = async (): Promise<WASMModule> => {
       if (typeof next_eclipse_from_raw !== 'function') throw new Error('WASM export next_eclipse_from missing');
       if (typeof moon_age_and_phase4_raw !== 'function') throw new Error('WASM export moon_age_and_phase4 missing');
       if (typeof is_moon_void_of_course_raw !== 'function') throw new Error('WASM export is_moon_void_of_course missing');
+      if (typeof set_state_extended_enabled_raw !== 'function') throw new Error('WASM export set_state_extended_enabled missing');
       if (typeof get_mean_obliquity_raw !== 'function') throw new Error('WASM export get_mean_obliquity missing');
       if (typeof get_apparent_sidereal_time_raw !== 'function') throw new Error('WASM export get_apparent_sidereal_time missing');
       if (typeof get_quantum_time_components_raw !== 'function') throw new Error('WASM export get_quantum_time_components missing');
@@ -168,6 +172,9 @@ export const initializeWASM = async (): Promise<WASMModule> => {
         },
         get_version: (): string => version,
         memory,
+        set_state_extended_enabled: (enabled: boolean): void => {
+          set_state_extended_enabled_raw(Boolean(enabled));
+        },
         next_winter_solstice_from: (jdStartUtc: number) => {
           if (!Number.isFinite(jdStartUtc)) throw new Error(`Invalid Julian Day: ${jdStartUtc}`);
           return next_winter_solstice_from_raw(jdStartUtc);

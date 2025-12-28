@@ -23,6 +23,7 @@ declare global {
 declare module '../wasm-astro/starscalendars_wasm_astro.js' {
   export default function init(input?: any): Promise<any>;
   export function compute_state(jd: number): number;
+  export function set_state_extended_enabled(enabled: boolean): void;
   export function next_winter_solstice_from(jd: number): number;
   export function get_version(): string;
   export const memory: WebAssembly.Memory;
