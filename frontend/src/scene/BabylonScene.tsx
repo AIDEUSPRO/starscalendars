@@ -308,6 +308,10 @@ interface SceneState {
   moonPanelToRot?: Quaternion;
   moonPanelFromScale?: Vector3;
   moonPanelToScale?: Vector3;
+  // Camera position cache for skipping panel updates when camera hasn't moved
+  lastCamAlpha?: number;
+  lastCamBeta?: number;
+  lastCamRadius?: number;
 }
 
 // ✅ FPS Counter interface for useRef
@@ -653,10 +657,11 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
     camera.panningSensibility = 1000;  // Standard panning sensitivity
     camera.angularSensibilityX = 1000; // Standard horizontal rotation
     camera.angularSensibilityY = 1000; // Standard vertical rotation
+    camera.mapPanning = false;         // Disable map-style panning
 
-    // ✅ Disable inertia completely - causes lag on budget devices
-    camera.inertia = 0;                // No inertia = instant stop, no CPU during deceleration
-    camera.panningInertia = 0;         // No panning inertia
+    // ✅ Enable inertia for smooth camera movement
+    camera.inertia = 0.7;              // Lower inertia = faster stop, less CPU during deceleration
+    camera.panningInertia = 0.7;       // Smooth panning inertia
     camera.fov = 1.5;                  // Match reference FOV
 
     // ✅ ONLY SUN LIGHTING - as requested!
@@ -1133,7 +1138,7 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
     tbSolstice.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
     tbSolstice.verticalAlignment = Control.VERTICAL_ALIGNMENT_BOTTOM;
     tbSolstice.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
-    tbSolstice.top = '-120px';
+    tbSolstice.top = '-160px';
     tbSolstice.text = 'До зимнего солнцестояния: —';
     gui.addControl(tbSolstice);
 
