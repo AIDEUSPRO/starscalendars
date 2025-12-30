@@ -120,3 +120,5 @@ bench-results/
 # Security scanning results
 security-audit.json
 vulnerability-scan.log
+
+DEPLOY_ALMALINUX10.md

@@ -2,7 +2,7 @@
 ## Zero-Tolerance Quality Enforcement for StarsCalendars Spiritual Platform
 
 [![Quality Guardian](https://img.shields.io/badge/Quality-Guardian%20Enforced-green)](https://github.com/starscalendars/starscalendars)
-[![Rust 1.91.1+](https://img.shields.io/badge/Rust-1.91.1%2B-orange)](https://www.rust-lang.org/)
+[![Rust 1.92.0+](https://img.shields.io/badge/Rust-1.92.0%2B-orange)](https://www.rust-lang.org/)
 [![Zero Anti-patterns](https://img.shields.io/badge/Anti--patterns-Zero%20Tolerance-red)](./QUALITY.md)
 [![Architecture](https://img.shields.io/badge/Architecture-Clean%20Compliance-blue)](./CLAUDE.md)
 

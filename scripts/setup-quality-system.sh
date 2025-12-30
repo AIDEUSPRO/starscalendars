@@ -62,9 +62,9 @@ fi
 RUST_VERSION=$(rustc --version | cut -d' ' -f2)
 log_success "Rust $RUST_VERSION detected"
 
-# Check for minimum Rust version (1.91.1+ required for edition 2024 features)
+# Check for minimum Rust version (1.92.0+ required for edition 2024 features)
 if ! rustc --version | grep -E "1\.(8[0-9]|9[0-9])" >/dev/null; then
-    log_warning "Rust 1.91.1+ required for edition 2024 features and production deployment"
+    log_warning "Rust 1.92.0+ required for edition 2024 features and production deployment"
 fi
 
 # Step 2: Install quality tools

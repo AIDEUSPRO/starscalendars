@@ -4,7 +4,7 @@ This document is the single source of truth for agents. It resolves previous con
 
 ## Stack (major-only)
 - Frontend: TypeScript 5.9, React 19, Vite 7, Babylon.js 8 (major; latest 8.x at build time)
-- WASM core: Rust 1.91.1+, wasm-bindgen; local `astro-rust/` (READ-ONLY).
+- WASM core: Rust 1.92.0+, wasm-bindgen; local `astro-rust/` (READ-ONLY).
 - Backend: Axum 0.8, Tokio 1, SQLX 0.8, Teloxide 0.13 (not required for scene)
 
 ## Scene Model (reference parity)

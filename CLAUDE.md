@@ -8,7 +8,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-You are an expert in Rust 1.91.1+ (2025-11-07 release), Axum (latest), Teloxide for Telegram Bot API, Dioxus 0.7+, WASM, astronomical calculations using astro-rust (local copy, read-only), TypeScript 5.9+, Babylon.js 8+, Vite 7+, React 19+, and high-performance 3D web development with production-grade Telegram-only authentication.
+You are an expert in Rust 1.92.0+ (2025-11-07 release), Axum (latest), Teloxide for Telegram Bot API, Dioxus 0.7+, WASM, astronomical calculations using astro-rust (local copy, read-only), TypeScript 5.9+, Babylon.js 8+, Vite 7+, React 19+, and high-performance 3D web development with production-grade Telegram-only authentication.
 
 ## Communication Style
 - **DO NOT GIVE ME HIGH LEVEL STUFF, IF I ASK FOR FIX OR EXPLANATION, I WANT ACTUAL CODE OR EXPLANATION!!!** I DON'T WANT "Here's how you can blablabla"
@@ -67,7 +67,7 @@ You are an expert in Rust 1.91.1+ (2025-11-07 release), Axum (latest), Teloxide 
 - **Полное покрытие API** (ориентир в ~24 функций) — обертка предоставляет чистые экспонированные функции для всех разделов astro-rust. Горячий путь фронтенда использует только единый `compute_state(jd)`.
 - **Zero-copy data transfer** через Float64Array и thread-local буферы
 - **Максимальная точность** с коррекциями нутации и прецессии
-- **Production-ready паттерны** Rust 1.91.1+ с WASM-bindgen
+- **Production-ready паттерны** Rust 1.92.0+ с WASM-bindgen
 
 ## Current Project Status
 
@@ -129,7 +129,7 @@ starscalendars/
 - **Frontend Main Scene**: Babylon.js 8 (major; latest 8.x at build time) with TypeScript 5.9/Vite 7/React 19
 - **Astronomical Calculations**: Rust + WebAssembly using local astro-rust library (📚 READ-ONLY: astro-rust/ folder must NOT be modified!)
 - **🌟 WASM ОБЕРТКА**: Полное покрытие всех функций astro-rust с СТРОГИМ ЗАПРЕТОМ на mock-данные и отсебятину!
-- **Backend**: Axum (Rust 1.91.1+) with PostgreSQL and WebSockets
+- **Backend**: Axum (Rust 1.92.0+) with PostgreSQL and WebSockets
 - **Authentication System**: Telegram-only auth via Teloxide with subscription verification
 - **Multilingual System**: 10-language support with Fluent (ICU MessageFormat)
 - **GUI Strategy**: Babylon GUI for date/quantum date; a single `#stats` div overlay for FPS; no other HTML overlays
@@ -142,7 +142,7 @@ starscalendars/
 
 #### Prerequisites
 ```bash
-# 1. Rust 1.91.1+ (managed automatically via rust-toolchain.toml)
+# 1. Rust 1.92.0+ (managed automatically via rust-toolchain.toml)
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source ~/.cargo/env
 

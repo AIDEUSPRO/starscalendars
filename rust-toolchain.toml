@@ -1,5 +1,5 @@
 [toolchain]
-# Latest stable Rust for StarsCalendars production environment (targeting 1.91.1+ when released)
+# Latest stable Rust for StarsCalendars production environment (targeting 1.92.0+ when released)
 channel = "stable"
 components = [
     "cargo",

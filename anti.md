@@ -1,37 +1,37 @@
-# ❌ Rust Production Anti-Patterns — Zero Tolerance (2025, Rust 1.91.1)
+# ❌ Rust Production Anti-Patterns — Zero Tolerance (2025, Rust 1.92.0)
 
 > **Purpose**: Hard rules for production-grade high-load systems based on official Rust stdlib documentation  
 > **Sources**: https://doc.rust-lang.org/stable/std/ + performance research + production analysis  
-> **Updated**: January 2025 based on Rust 1.90+ stable documentation (addenda for Rust 1.91.1 patch release[^rust1911])  
+> **Updated**: January 2025 based on Rust 1.90+ stable documentation (addenda for Rust 1.92.0 patch release[^rust1911])  
 > **Enforcement**: clippy/scripts/CI + mandatory agent compliance  
 
 ---
 
-## 0) Rust 1.91.1 Toolchain & Platform Guardrails
+## 0) Rust 1.92.0 Toolchain & Platform Guardrails
 
 ### 🎯 Mandatory Toolchain Pinning
 
-- CI/build images **must** pin `rustc`/`cargo` 1.91.1 to pick up the Wasm import fix and illumos locking patch.[^rust1911]
-- `rust-toolchain.toml` stays on `channel = "1.91.1"` (repo policy already forbids `rust-version` inside Cargo manifests).
-- Add `make toolchain-verify`: fails if `rustc --version` output lacks `1.91.1`.
-- Release checklist: `rustup run 1.91.1 cargo metadata --locked` before tagging; fail if toolchain drifts.
+- CI/build images **must** pin `rustc`/`cargo` 1.92.0 to pick up the Wasm import fix and illumos locking patch.[^rust1911]
+- `rust-toolchain.toml` stays on `channel = "1.92.0"` (repo policy already forbids `rust-version` inside Cargo manifests).
+- Add `make toolchain-verify`: fails if `rustc --version` output lacks `1.92.0`.
+- Release checklist: `rustup run 1.92.0 cargo metadata --locked` before tagging; fail if toolchain drifts.
 
 ### 🛰️ Wasm Import Regression Guardrail
 
-- Rust 1.91.0 had UB when multiple crates used `#[link(wasm_import_module)]`; 1.91.1 fixes it.[^rust1911]
-- Never build wasm-astro (or any Wasm target) on <1.91.1.
+- Rust 1.92.0 had UB when multiple crates used `#[link(wasm_import_module)]`; 1.92.0 fixes it.[^rust1911]
+- Never build wasm-astro (or any Wasm target) on <1.92.0.
 - Add `scripts/test-wasm-imports.sh`: links two dummy crates with unique `wasm_import_module` values to catch regressions; run in CI.
 
 ### ☀️ Cargo Target Locking on illumos / Shared Storage
 
-- 1.91.1 restores `File::lock` so Cargo can serialize writes; older toolchains corrupt `target/` on parallel builds.[^rust1911]
+- 1.92.0 restores `File::lock` so Cargo can serialize writes; older toolchains corrupt `target/` on parallel builds.[^rust1911]
 - Guardrail:
   - On illumos/network filesystems run smoke test `cargo check & cargo check` (expect success).
   - Detection script should fall back to per-job `CARGO_TARGET_DIR` if locks are unsupported.
 
 ### 📚 Documentation & Plan Sync
 
-- `anti.md` is authoritative; after merging content from other guidance (e.g., `rust-1.91.1-production-anti-patterns.md`), that file may be deleted.
+- `anti.md` is authoritative; after merging content from other guidance (e.g., `rust-1.92.0-production-anti-patterns.md`), that file may be deleted.
 - When new Rust releases land, append a subsection here summarizing critical fixes + enforcement hooks.
 
 ---
@@ -228,7 +228,7 @@ tokio::task::spawn_blocking(move || {
 }).await??
 ```
 
-### ⏱️ REAL-TIME LATENCY & BOUNDED CONCURRENCY (Rust 1.91.1+)
+### ⏱️ REAL-TIME LATENCY & BOUNDED CONCURRENCY (Rust 1.92.0+)
 
 - **Budget every hop**: define p95/p99 latency targets per async pipeline; fail CI benches exceeding budgets (Tokio recommends explicit budgets for cooperative scheduling[^tokio]).
 - **Cap fan-out**: prefer `.buffered(N)` / `.buffer_unordered(N)` / `tokio::sync::Semaphore` to keep concurrency bounded.
@@ -384,7 +384,7 @@ rg -n "panic!\(" --type rust .        # Fail on panic usage
 - **Anti-pattern detection** - Automated scanning in CI
 - **Agent validation** - All agent outputs must comply
 - **Documentation compliance** - Agents must reference official sources
-- **Toolchain compliance** - `make toolchain-verify` fails if `rustc` ≠ 1.91.1
+- **Toolchain compliance** - `make toolchain-verify` fails if `rustc` ≠ 1.92.0
 - **Wasm import regression test** - `scripts/test-wasm-imports.sh` runs in CI for wasm-astro
 
 ---
@@ -400,7 +400,7 @@ rg -n "panic!\(" --type rust .        # Fail on panic usage
 - [Rustonomicon](https://doc.rust-lang.org/nomicon/)
 - [Tokio Topics: Bridging with sync code](https://tokio.rs/tokio/topics/bridging)
 - [Rust API Guidelines](https://rust-lang.github.io/api-guidelines/documentation.html)
-- [Announcing Rust 1.91.1](https://blog.rust-lang.org/2025/11/10/Rust-1.91.1/)
+- [Announcing Rust 1.92.0](https://blog.rust-lang.org/2025/11/10/Rust-1.92.0/)
 
 ### Error Handling Philosophy:
 > "Panics are meant for unrecoverable errors" - Official Rust Documentation  
@@ -409,9 +409,9 @@ rg -n "panic!\(" --type rust .        # Fail on panic usage
 
 ---
 
-**🎯 Zero-Tolerance Rule**: This document defines hard requirements based on official Rust documentation and the Rust 1.91.1 release guidance. All violations block CI/CD and prevent deployment. Agents MUST validate against these rules before generating any code.
+**🎯 Zero-Tolerance Rule**: This document defines hard requirements based on official Rust documentation and the Rust 1.92.0 release guidance. All violations block CI/CD and prevent deployment. Agents MUST validate against these rules before generating any code.
 
 [^api]: Rust API Guidelines, checklist item C-QUESTION-MARK — examples should prefer `?` over `unwrap`.
 [^tokio]: Tokio Topics “Bridging with sync code” — explains yielding and bounded blocking in cooperative schedulers.
 [^nomicon]: *The Rustonomicon*, chapters “Ownership and Borrowing” / “Send and Sync”.
-[^rust1911]: *Announcing Rust 1.91.1*, Rust Blog (2025‑11‑10) — fixes Wasm import-module regression and re-enables `File::lock` on illumos.
+[^rust1911]: *Announcing Rust 1.92.0*, Rust Blog (2025‑11‑10) — fixes Wasm import-module regression and re-enables `File::lock` on illumos.

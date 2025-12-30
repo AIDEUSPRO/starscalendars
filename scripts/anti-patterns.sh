@@ -197,7 +197,7 @@ echo "  - unwrap*/expect* are banned everywhere (tests included)"
 echo "  - Production code must use proper error handling"
 
 echo ""
-echo "🦀 Rust 1.91.1+ specific pattern validation..."
+echo "🦀 Rust 1.92.0+ specific pattern validation..."
 
 # Enhanced anti.md patterns (2025-01-08)
 echo "🔍 Checking enhanced anti.md patterns..."

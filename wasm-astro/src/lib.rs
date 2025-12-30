@@ -1787,119 +1787,132 @@ pub fn get_function_count() -> usize {
 }
 
 // ===================== QUANTUM TIME (NT) SUPPORT =====================
-// 1:1 перенос семантики из фронта (без строк). Возвращаем числа для форматирования на JS.
+// Квантовое время: год начинается 11 августа 00:00:01 UTC (день Ориона).
+// Таблица генерируется с чекпоинтами каждый год для точной синхронизации.
+// Вся логика в WASM, JS только форматирует строку.
 
+/// Квантовый год: начало (Unix ms) и индекс года
 #[derive(Clone, Copy)]
-struct QuantumEntry {
-    u_ms: f64, // Unix ms
-    d: i32,    // day in year [0..365)
-    y: i32,    // year index starting at 0
+struct QuantumYear {
+    start_ms: f64, // Unix ms начала года (11 августа 00:00:01 UTC)
+    year_idx: i32, // Индекс года (0 = 2012, 1 = 2013, ...)
 }
 
 thread_local! {
-    static QUANTUM_TABLE: RefCell<Vec<QuantumEntry>> = RefCell::new(Vec::with_capacity(32000));
+    static QUANTUM_YEARS: RefCell<Vec<QuantumYear>> = RefCell::new(Vec::with_capacity(128));
 }
 
-const QT_CONST_NT_MS: f64 = 1344643200000.0; // constNT @allow-wasm-const
-const QT_CONST_D_MS: f64 = 86459178.082191780821918_f64; // constD @allow-wasm-const
-const QT_CONST_D_EXTRA_MS: f64 = 43229589.41095890410959_f64; // constDExtra @allow-wasm-const
-const QT_MAX_TIME_MS: f64 = 4090089600000.0; // maxTime @allow-wasm-const
-const QT_SPECIAL_YEAR: i32 = 11; // specialYear @allow-wasm-const
-const QT_SPECIAL_DAY: i32 = 121; // specialDay @allow-wasm-const
+// Эпоха: 11 августа 2012 00:00:01 UTC
+const QT_EPOCH_MS: f64 = 1344643201000.0; // 2012-08-11T00:00:01.000Z @allow-wasm-const
+// Квантовый день = ровно 24 часа (86400 секунд)
+const QT_DAY_MS: f64 = 86400000.0; // @allow-wasm-const
+// Максимальный год для таблицы (до 2099)
+const QT_MAX_YEAR: i32 = 87; // @allow-wasm-const
 
-fn init_quantum_table_if_needed() {
-    QUANTUM_TABLE.with(|tbl| {
+/// Вычисляет Unix ms для 11 августа 00:00:01 UTC заданного григорианского года
+#[inline]
+fn aug11_epoch_for_year(gregorian_year: i32) -> f64 {
+    // Используем astro-rust для точного JD -> Unix ms
+    let date = astro::time::Date {
+        year: gregorian_year as i16,
+        month: astro::time::Month::Aug,
+        decimal_day: 11.0 + 1.0 / 86400.0, // 11 августа 00:00:01
+        cal_type: astro::time::CalType::Gregorian,
+    };
+    let jd = astro::time::julian_day(&date);
+    // JD -> Unix ms: (JD - 2440587.5) * 86400000
+    (jd - 2440587.5) * 86400000.0
+}
+
+/// Инициализирует таблицу квантовых лет (чекпоинты 11 августа каждого года)
+fn init_quantum_years_if_needed() {
+    QUANTUM_YEARS.with(|tbl| {
         let mut v = tbl.borrow_mut();
         if !v.is_empty() {
             return;
         }
-        let mut u = QT_CONST_NT_MS;
-        let mut d: i32 = 0;
-        let mut y: i32 = 0;
-        while u < QT_MAX_TIME_MS {
-            v.push(QuantumEntry { u_ms: u, d, y });
-            if y == QT_SPECIAL_YEAR && d == QT_SPECIAL_DAY {
-                u += QT_CONST_D_EXTRA_MS;
-                d += 1;
-                v.push(QuantumEntry { u_ms: u, d, y });
-                u += QT_CONST_D_EXTRA_MS;
-                d += 1;
-                v.push(QuantumEntry { u_ms: u, d, y });
-            } else {
-                u += QT_CONST_D_MS;
-                d += 1;
-            }
-            if d == 365 {
-                d = 0;
-                y += 1;
-            }
+        // Год 0 = 2012, год 1 = 2013, ...
+        let mut year_idx: i32 = 0;
+        while year_idx <= QT_MAX_YEAR {
+            let gregorian_year = 2012 + year_idx;
+            let start_ms = aug11_epoch_for_year(gregorian_year);
+            v.push(QuantumYear { start_ms, year_idx });
+            year_idx += 1;
         }
     });
 }
 
+/// Binary search для нахождения текущего квантового года
 #[inline]
-fn floor_div(a: f64, b: f64) -> f64 {
-    (a / b).floor()
-}
-
-fn adjust_ms_like_js(epoch_ms: f64, tz_offset_min: f64) -> f64 {
-    // JS: setHours(24 - (getTimezoneOffset()/60 + 4)); minutes=seconds=ms=0
-    // Воспроизводим локальную нормализацию суток и переносим к UTC.
-    let local_ms = epoch_ms - tz_offset_min * 60_000.0;
-    let day_ms = 86_400_000.0;
-    let hour_ms = 3_600_000.0;
-    let tz_hours = tz_offset_min / 60.0;
-    let target_h_real = 24.0 - (tz_hours + 4.0);
-    let target_h_floor = target_h_real.floor();
-    // Нормализуем часы и сдвиг дня
-    let h_norm = ((target_h_floor % 24.0) + 24.0) % 24.0;
-    let day_offset = ((target_h_floor - h_norm) / 24.0).floor();
-    let local_day_idx = floor_div(local_ms, day_ms);
-    let adjusted_local_ms = (local_day_idx + day_offset) * day_ms + h_norm * hour_ms;
-    // Обратно в UTC
-    adjusted_local_ms + tz_offset_min * 60_000.0
-}
-
-fn binary_search_qt(table: &[QuantumEntry], target_u_ms: f64) -> Option<QuantumEntry> {
-    let mut left: isize = 0;
-    let mut right: isize = table.len() as isize - 1;
-    let mut best: Option<QuantumEntry> = None;
+fn find_quantum_year(years: &[QuantumYear], epoch_ms: f64) -> Option<QuantumYear> {
+    if years.is_empty() {
+        return None;
+    }
+    // Если до эпохи — возвращаем год 0
+    if epoch_ms < years[0].start_ms {
+        return Some(years[0]);
+    }
+    let mut left: usize = 0;
+    let mut right: usize = years.len() - 1;
+    let mut best_idx: usize = 0;
     while left <= right {
-        let mid = left + ((right - left) / 2);
-        let e = table[mid as usize];
-        if e.u_ms <= target_u_ms {
-            best = Some(e);
+        let mid = left + (right - left) / 2;
+        if years[mid].start_ms <= epoch_ms {
+            best_idx = mid;
             left = mid + 1;
         } else {
+            if mid == 0 {
+                break;
+            }
             right = mid - 1;
         }
     }
-    best
+    Some(years[best_idx])
 }
 
 /// Compute Quantum Time components [d_in_decade, decade_index, year_index]
-/// Input: epoch_ms (Unix ms), timezone_offset_minutes (like Date.getTimezoneOffset())
+/// Input: epoch_ms (Unix ms UTC)
+/// Орион снисходит 11 августа 00:00:01 UTC — космическое время для всей планеты
 #[wasm_bindgen]
-pub fn get_quantum_time_components(epoch_ms: f64, timezone_offset_minutes: f64) -> *const f64 {
+pub fn get_quantum_time_components(epoch_ms: f64, _timezone_offset_minutes: f64) -> *const f64 {
     thread_local! { static QT_OUT: RefCell<[f64; 3]> = const { RefCell::new([0.0; 3]) }; }
     QT_OUT.with(|buf| {
         let mut out = buf.borrow_mut();
-        if !epoch_ms.is_finite() || !timezone_offset_minutes.is_finite() {
+        if !epoch_ms.is_finite() {
             return std::ptr::null();
         }
-        init_quantum_table_if_needed();
-        let adjusted_ms = adjust_ms_like_js(epoch_ms, timezone_offset_minutes);
-        let res = QUANTUM_TABLE.with(|tbl| {
-            let v = tbl.borrow();
-            binary_search_qt(&v, adjusted_ms)
+        init_quantum_years_if_needed();
+
+        let result = QUANTUM_YEARS.with(|tbl| {
+            let years = tbl.borrow();
+            find_quantum_year(&years, epoch_ms)
         });
-        match res {
-            Some(e) => {
-                let dp = (e.d / 10) as f64;
-                let d_in_decade = (e.d - (e.d / 10) * 10) as f64;
-                out[0] = d_in_decade;
-                out[1] = dp;
-                out[2] = e.y as f64;
+
+        match result {
+            Some(qy) => {
+                // Сколько ms прошло с начала квантового года (UTC)
+                let ms_since_year_start = epoch_ms - qy.start_ms;
+                // Если до начала года — день 0
+                let day_in_year = if ms_since_year_start < 0.0 {
+                    0
+                } else {
+                    (ms_since_year_start / QT_DAY_MS).floor() as i32
+                };
+                // Ограничиваем 0..364
+                let day_clamped = if day_in_year < 0 {
+                    0
+                } else if day_in_year > 364 {
+                    364
+                } else {
+                    day_in_year
+                };
+
+                let decade = day_clamped / 10;
+                let d_in_decade = day_clamped - decade * 10;
+
+                out[0] = d_in_decade as f64;
+                out[1] = decade as f64;
+                out[2] = qy.year_idx as f64;
                 out.as_ptr()
             }
             None => std::ptr::null(),

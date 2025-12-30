@@ -104,16 +104,14 @@ const computeScenePositionFromRaDec = (
 
 // lat/lon (east-positive, degrees) -> local XYZ on Earth's sphere with given radius
 // Uses the same mapping as zenith/sublunar markers to keep geometry consistent.
-const latLonToLocalXYZ = (latDeg: number, lonDeg: number, radius: number): Vector3 => {
-  const latRad = latDeg * Math.PI / 180;
-  const lonRad = lonDeg * Math.PI / 180;
-  const phi = (Math.PI / 2) - latRad;
-  const theta = (-lonRad) + Math.PI;
-  const sinPhi = Math.sin(phi);
-  const x = radius * sinPhi * Math.cos(theta);
-  const z = radius * sinPhi * Math.sin(theta);
-  const y = radius * Math.cos(phi);
-  return new Vector3(x, y, z);
+const latLonToLocalXYZ = (earthRadiusLocal: number, userLatDeg: number, userLonDeg: number): Vector3 => {
+  const phi = (90 - userLatDeg) * (Math.PI / 180);
+  const theta = (userLonDeg + 180) * (Math.PI / 180);
+  return new Vector3(
+    earthRadiusLocal * Math.sin(phi) * Math.cos(theta),
+    earthRadiusLocal * Math.cos(phi),
+    earthRadiusLocal * Math.sin(phi) * Math.sin(theta)
+  );
 };
 
 // ✅ КРИТИЧЕСКИЙ БЛОК 1: STAR DATA МАССИВ из референсной сцены (строки 710-739)
@@ -363,11 +361,12 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
 
   // ✅ КРИТИЧЕСКИЙ БЛОК 4: QUANTUM TIME FUNCTIONS (строки 82-98, 107-144 из референса)
 
-  // Переносим NT на WASM: форматируем метку из трёх компонентов [d_in_decade, decade, year]
+  // Квантовое время из WASM: [d_in_decade, decade, year]
+  // Вся логика в WASM, JS только форматирует строку
+  // Орион снисходит 11 августа 00:00:01 UTC — космическое время для всей планеты
   const getQuantumTimeFromWASM = useCallback((epochMs: number, wasm: WASMModule): string => {
     try {
-      const tzMin = new Date(epochMs).getTimezoneOffset();
-      const ptr = wasm.get_quantum_time_components(epochMs, tzMin);
+      const ptr = wasm.get_quantum_time_components(epochMs, 0);
       if (!ptr) return '00.00.00';
       const mem = wasm.memory.buffer;
       const view = new Float64Array(mem, ptr, 3);
@@ -1168,19 +1167,33 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
       }
 
       // Approximate user position from timezone
+      // getTimezoneOffset() returns minutes WEST of UTC (negative for east)
+      // Example: MSK (UTC+3) → offset = -180 → lon = 45°, London (UTC+0) → offset = 0 → lon = 0°
       const now = new Date();
       const tzOffsetMin = now.getTimezoneOffset(); // minutes, west-positive
-      const userLonDeg = -tzOffsetMin / 4;        // 15°/hour * offset/60
-      const userLatDeg = 45;                      // placeholder latitude (north), can be made dynamic later
+      const userLonDeg = -tzOffsetMin * (15 / 60); // 15° per hour of offset
+
+      // Latitude placeholder: ~45° (Anapa/Black Sea region) — good for Russia, Europe, USA users
+      // Longitude is dynamic from timezone
+      const userLatDeg = 45;
 
       const earthRadiusLocal = CELESTIAL_BODIES.earth!.radius * 0.5;
-      const localPoint = latLonToLocalXYZ(userLatDeg, userLonDeg, earthRadiusLocal);
+      // Reference formula: phi = (90 - lat), theta = (lon + 180)
+      const localPoint = latLonToLocalXYZ(earthRadiusLocal, userLatDeg, userLonDeg);
 
-      // ⚠️ НЕ применяем rotationQuaternion — при первом вызове без него работает правильно,
-      // значит трансформация лишняя (lat/lon уже учтены в latLonToLocalXYZ).
-      // Камера ставится в фиксированную точку пространства относительно позиции Земли.
-      const surfaceGlobal = earthPivotNode.position.add(localPoint);
-      const normal = localPoint.normalize();
+      // Transform localPoint by earthPivot's current rotation to get world-space surface point
+      // This ensures camera is positioned relative to Earth's CURRENT orientation (not modifying planet!)
+      let surfacePointWorld: Vector3;
+      if (earthPivotNode.rotationQuaternion) {
+        const rotMatrix = new Matrix();
+        Matrix.FromQuaternionToRef(earthPivotNode.rotationQuaternion, rotMatrix);
+        surfacePointWorld = Vector3.TransformCoordinates(localPoint, rotMatrix);
+      } else {
+        surfacePointWorld = localPoint.clone();
+      }
+
+      const surfaceGlobal = earthPivotNode.position.add(surfacePointWorld);
+      const normal = surfacePointWorld.normalize();
       const cameraPos = surfaceGlobal.add(normal.scale(60));
 
       // ⚠️ Сбрасываем лимиты ПЕРЕД установкой позиции (могут остаться от Moon режима)
