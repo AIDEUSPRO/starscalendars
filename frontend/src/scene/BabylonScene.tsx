@@ -1124,30 +1124,22 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
     });
     gui.addControl(tbTD);
 
-    // Winter solstice countdown (top-right)
+    // Winter solstice countdown (bottom center, above camera buttons)
     const tbSolstice = new TextBlock('tbSolstice');
-    tbSolstice.fontSizeInPixels = 14;
-    tbSolstice.width = '380px';
-    tbSolstice.height = '20px';
-    tbSolstice.color = '#CCCDCE';
+    tbSolstice.fontSizeInPixels = 16;
+    tbSolstice.width = '420px';
+    tbSolstice.height = '24px';
+    tbSolstice.color = '#E8E8EA';
     tbSolstice.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
     tbSolstice.verticalAlignment = Control.VERTICAL_ALIGNMENT_BOTTOM;
     tbSolstice.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
-    tbSolstice.top = -8;
+    tbSolstice.top = '-120px';
     tbSolstice.text = 'До зимнего солнцестояния: —';
     gui.addControl(tbSolstice);
 
-    // ✅ Camera target switch buttons (bottom center)
-    const cameraPanel = new StackPanel('cameraPanel');
-    cameraPanel.isVertical = false;
-    cameraPanel.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
-    cameraPanel.verticalAlignment = Control.VERTICAL_ALIGNMENT_BOTTOM;
-    cameraPanel.top = '-40px';
-    cameraPanel.width = '120px';
-    cameraPanel.height = '50px';
-    gui.addControl(cameraPanel);
+    // ✅ Camera target switch buttons - Moon top-left, Earth top-right
 
-    // Helper: apply Earth camera preset (used on startup and by Earth button)
+    // Helper: apply Earth camera preset (used ORIZtartup and by Earth button)
     const applyEarthCameraPreset = (): void => {
       const state = sceneStateRef.current;
       state.cameraTarget = 'earth';
@@ -1242,18 +1234,38 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
       }
     };
 
+    // Earth button - top right corner
+    const earthContainer = new StackPanel('earthContainer');
+    earthContainer.isVertical = true;
+    earthContainer.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_RIGHT;
+    earthContainer.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+    earthContainer.width = '90px';
+    earthContainer.height = '90px';
+    earthContainer.top = '100px';
+    earthContainer.left = '-20px';
+
     const btnEarth = Button.CreateSimpleButton('btnEarth', '🌍');
-    btnEarth.width = '50px';
-    btnEarth.height = '50px';
+    btnEarth.width = '70px';
+    btnEarth.height = '70px';
+    btnEarth.fontSizeInPixels = 36;
     btnEarth.color = 'white';
-    btnEarth.background = 'transparent';
-    btnEarth.thickness = 0;
+    btnEarth.background = 'rgba(30, 60, 120, 0.5)';
+    btnEarth.cornerRadius = 12;
+    btnEarth.thickness = 2;
     btnEarth.isPointerBlocker = true;
     btnEarth.hoverCursor = 'pointer';
     btnEarth.onPointerClickObservable.add(() => {
       applyEarthCameraPreset();
     });
-    cameraPanel.addControl(btnEarth);
+    earthContainer.addControl(btnEarth);
+
+    const lblEarth = new TextBlock('lblEarth', 'Земля');
+    lblEarth.fontSizeInPixels = 12;
+    lblEarth.height = '18px';
+    lblEarth.color = '#AABBCC';
+    earthContainer.addControl(lblEarth);
+
+    gui.addControl(earthContainer);
 
     // Helper: apply Moon camera preset (used on startup and by Moon button)
     const applyMoonCameraPreset = (): void => {
@@ -1338,18 +1350,38 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
       }
     };
 
+    // Moon button - top left corner
+    const moonContainer = new StackPanel('moonContainer');
+    moonContainer.isVertical = true;
+    moonContainer.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+    moonContainer.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+    moonContainer.width = '90px';
+    moonContainer.height = '90px';
+    moonContainer.top = '100px';
+    moonContainer.left = '20px';
+
     const btnMoon = Button.CreateSimpleButton('btnMoon', '🌙');
-    btnMoon.width = '50px';
-    btnMoon.height = '50px';
+    btnMoon.width = '70px';
+    btnMoon.height = '70px';
+    btnMoon.fontSizeInPixels = 36;
     btnMoon.color = 'white';
-    btnMoon.background = 'transparent';
-    btnMoon.thickness = 0;
+    btnMoon.background = 'rgba(60, 60, 90, 0.5)';
+    btnMoon.cornerRadius = 12;
+    btnMoon.thickness = 2;
     btnMoon.isPointerBlocker = true;
     btnMoon.hoverCursor = 'pointer';
     btnMoon.onPointerClickObservable.add(() => {
       applyMoonCameraPreset();
     });
-    cameraPanel.addControl(btnMoon);
+    moonContainer.addControl(btnMoon);
+
+    const lblMoon = new TextBlock('lblMoon', 'Луна');
+    lblMoon.fontSizeInPixels = 12;
+    lblMoon.height = '18px';
+    lblMoon.color = '#AABBCC';
+    moonContainer.addControl(lblMoon);
+
+    gui.addControl(moonContainer);
 
     // ✅ Moon info panels (3D world-space) — thin 3D “wedge”: inner face near Moon, outer edge towards camera
     const mkMoon3DPanel = (name: string) => {
