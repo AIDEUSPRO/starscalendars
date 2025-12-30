@@ -32,7 +32,7 @@ axum = { version = "0.8", features = ["ws", "macros", "multipart"] }
 tower = "0.5"  # Последняя версия 0.5.2
 tower-http = { version = "0.6", features = ["cors", "compression-gzip", "trace", "fs"] }
 hyper = { version = "1", features = ["full"] }  # Последняя версия 1.6.0
-reqwest = { version = "0.13", features = ["json", "rustls-tls"] }  # Последняя версия 0.13.22
+reqwest = { version = "0.13", features = ["json"] }  # Последняя версия 0.13.22
 http = "1"
 http-body-util = "0.1"
 

@@ -225,8 +225,7 @@ interface SceneState {
   moonPivot?: TransformNode | null;
   zenithRay?: Mesh | null;
   zenithRayPositions?: Float32Array | null;
-  statsEl?: HTMLElement | null;
-  statsFpsEl?: HTMLElement | null;
+  //statsEl?: HTMLElement | null;
   tbSolstice?: TextBlock | null;
   lastSolsticeMinute?: number;
   isSolsticeComputing?: boolean;
@@ -1456,8 +1455,7 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
       moonPivot,
       zenithRay: null, // COMMENTED OUT: auxiliary marker not needed
       zenithRayPositions: null, // COMMENTED OUT: auxiliary marker not needed
-      statsEl: typeof document !== 'undefined' ? document.getElementById('stats') : null,
-      statsFpsEl: typeof document !== 'undefined' ? document.getElementById('stats-fps') : null,
+      //statsEl: typeof document !== 'undefined' ? document.getElementById('stats') : null,
       tbSolstice,
       lastSolsticeMinute: 0,
       isSolsticeComputing: false,
@@ -1720,13 +1718,12 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
     engine.runRenderLoop(() => {
       // Use absolute UTC time for correct Julian Day
       const nowMs = Date.now();
-      // Update FPS overlay using Engine API
-      const stats = sceneStateRef.current.statsEl;
-      if (stats) {
-        // ✅ "Как было изначально": мгновенно перезаписываем тело div
-        const fps = scene.getEngine().getFps();
-        stats.innerHTML = `FPS: <b>${fps.toFixed(0)}</b>`;
-      }
+      // ✅ FPS overlay disabled for production
+      // const stats = sceneStateRef.current.statsEl;
+      // if (stats) {
+      //   const fps = scene.getEngine().getFps();
+      //   stats.innerHTML = `FPS: <b>${fps.toFixed(0)}</b>`;
+      // }
 
       // ✅ Update celestial positions from WASM every frame (60fps smooth movement)
       if (wasmModule && sceneStateRef.current.isReady) {

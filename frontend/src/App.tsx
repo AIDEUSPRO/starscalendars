@@ -182,8 +182,8 @@ const App: React.FC = () => {
   return (
     <ErrorBoundary error={appState.error}>
       <div className="app-container" style={{ position: 'fixed', inset: 0 }}>
-        {/* Minimal overlay only for FPS via Babylon Tools */}
-        <div id="stats" className="stats-overlay" />
+        {/* ✅ FPS overlay disabled for production */}
+        {/* <div id="stats" className="stats-overlay" /> */}
 
         {/* Main 3D scene container - Babylon.js integration point */}
         <main className="scene-container">

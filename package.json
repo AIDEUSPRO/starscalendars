@@ -13,7 +13,7 @@
   "scripts": {
     "prepare": "simple-git-hooks",
     "build": "pnpm run build:wasm && pnpm run build:frontend && pnpm run build:dioxus && cargo build --release",
-    "build:prod": "pnpm -w install && pnpm run build:wasm && pnpm run build:frontend:prod",
+    "build:prod": "pnpm install && pnpm run build:wasm && pnpm run build:frontend:prod",
     "build:frontend": "pnpm --filter frontend build",
     "build:frontend:prod": "pnpm --filter starscalendars-frontend build:prod",
     "build:dioxus": "pnpm --filter dioxus-app build",
