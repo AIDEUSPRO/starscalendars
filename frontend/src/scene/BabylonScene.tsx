@@ -654,9 +654,9 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
     camera.angularSensibilityX = 1000; // Standard horizontal rotation
     camera.angularSensibilityY = 1000; // Standard vertical rotation
 
-    // ✅ Enable inertia for smooth camera movement
-    camera.inertia = 0.7;              // Lower inertia = faster stop, less CPU during deceleration
-    camera.panningInertia = 0.7;       // Smooth panning inertia
+    // ✅ Disable inertia completely - causes lag on budget devices
+    camera.inertia = 0;                // No inertia = instant stop, no CPU during deceleration
+    camera.panningInertia = 0;         // No panning inertia
     camera.fov = 1.5;                  // Match reference FOV
 
     // ✅ ONLY SUN LIGHTING - as requested!
