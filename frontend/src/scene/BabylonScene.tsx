@@ -214,6 +214,7 @@ interface SceneState {
   gui?: AdvancedDynamicTexture | null;
   tbNT?: TextBlock | null;
   tbTD?: TextBlock | null;
+  tbQuantumDay?: TextBlock | null;
   earthShaderMaterial?: ShaderMaterial | null;
   cloudsShaderMaterial?: ShaderMaterial | null;
   zenithMarker?: Mesh | null;
@@ -926,11 +927,15 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
     moonMaterial.specularPower = 16;
     // All moon textures (pre-flipped in image editor to match Babylon UV mapping)
     const moonDiff = new Texture('/textures/moon.jpg', scene);
-    const moonBump = new Texture('/textures/moon_bump.jpg', scene);
-    const moonSpec = new Texture('/textures/moon_spec.jpg', scene);
+    // const moonBump = new Texture('/textures/moon_bump.jpg', scene);
+    // const moonSpec = new Texture('/textures/moon_spec.jpg', scene);
     moonMaterial.diffuseTexture = moonDiff;
-    moonMaterial.bumpTexture = moonBump;
-    moonMaterial.specularTexture = moonSpec;
+    // moonMaterial.bumpTexture = moonBump;
+    // moonMaterial.invertNormalMapX = true;
+    // moonMaterial.specularTexture = moonSpec;
+    // Луна матовая — минимальный specular
+    moonMaterial.specularColor = new Color3(0.05, 0.05, 0.05);
+    moonMaterial.specularPower = 64;
     moonMaterial.freeze();
     moonMesh.material = moonMaterial;
 
@@ -1029,7 +1034,7 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
 
     // Telegram link (top-center, above quantum date) — centered text + icons on both sides
     const tgRect = new Rectangle('tgRect');
-    tgRect.width = '240px';
+    tgRect.width = '320px';
     tgRect.height = '28px';
     tgRect.thickness = 0;
     tgRect.background = 'rgba(0,0,0,0.0)';
@@ -1071,7 +1076,7 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
     tbTg.color = '#CCCDCE';
     tbTg.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
     tbTg.textVerticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
-    tbTg.text = 'ПОДРОБНЕЕ в ТГ‑Канале';
+    tbTg.text = 'РАСШИФРОВКА ДНЯ в @elioncalendar';
     tbTg.isPointerBlocker = false;
     tgGrid.addControl(tbTg, 0, 1);
 
@@ -1355,6 +1360,56 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
       }
     };
 
+    // ✅ Quantum Day label - "День" above the number
+    const lblQuantumDay = new TextBlock('lblQuantumDay', 'День');
+    lblQuantumDay.fontSizeInPixels = 14;
+    lblQuantumDay.color = '#AABBCC';
+    lblQuantumDay.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+    lblQuantumDay.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+    lblQuantumDay.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
+    lblQuantumDay.top = '8px';
+    lblQuantumDay.left = '20px';
+    lblQuantumDay.width = '90px';
+    lblQuantumDay.height = '18px';
+    lblQuantumDay.isPointerBlocker = true;
+    lblQuantumDay.hoverCursor = 'pointer';
+    lblQuantumDay.onPointerUpObservable.add(() => {
+      try {
+        window.open(TELEGRAM_CHANNEL_URL, '_blank', 'noopener,noreferrer');
+      } catch { /* ignore */ }
+    });
+    gui.addControl(lblQuantumDay);
+
+    // ✅ Quantum Day number - above Moon button (top-left, golden)
+    const tbQuantumDay = new TextBlock('tbQuantumDay', '0');
+    tbQuantumDay.fontSizeInPixels = 64;
+    tbQuantumDay.color = '#FFD700'; // Golden color
+    tbQuantumDay.fontWeight = 'bold';
+    tbQuantumDay.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+    tbQuantumDay.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+    tbQuantumDay.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
+    tbQuantumDay.top = '26px';
+    tbQuantumDay.left = '20px';
+    tbQuantumDay.width = '90px';
+    tbQuantumDay.height = '70px';
+    tbQuantumDay.isPointerBlocker = true;
+    tbQuantumDay.hoverCursor = 'pointer';
+    tbQuantumDay.onPointerUpObservable.add(() => {
+      try {
+        window.open(TELEGRAM_CHANNEL_URL, '_blank', 'noopener,noreferrer');
+      } catch { /* ignore */ }
+    });
+    gui.addControl(tbQuantumDay);
+    sceneStateRef.current.tbQuantumDay = tbQuantumDay;
+    // Immediate init of quantum day (no leading zero)
+    if (wasmModule) {
+      try {
+        const qtStr = getQuantumTimeFromWASM(Date.now(), wasmModule);
+        const dayPart = parseInt(qtStr.split('.')[0] ?? '0', 10);
+        tbQuantumDay.text = String(dayPart);
+      } catch { /* ignore */ }
+    }
+
     // Moon button - top left corner
     const moonContainer = new StackPanel('moonContainer');
     moonContainer.isVertical = true;
@@ -1362,7 +1417,7 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
     moonContainer.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
     moonContainer.width = '90px';
     moonContainer.height = '90px';
-    moonContainer.top = '100px';
+    moonContainer.top = '106px';
     moonContainer.left = '20px';
 
     const btnMoon = Button.CreateSimpleButton('btnMoon', '🌙');
@@ -1799,7 +1854,13 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
         const updateNT = () => {
           try {
             if (wasmModule && sceneStateRef.current.tbNT) {
-              sceneStateRef.current.tbNT.text = getQuantumTimeFromWASM(snapshot, wasmModule);
+              const qtStr = getQuantumTimeFromWASM(snapshot, wasmModule);
+              sceneStateRef.current.tbNT.text = qtStr;
+              // ✅ Update quantum day number (no leading zero)
+              if (sceneStateRef.current.tbQuantumDay) {
+                const dayPart = parseInt(qtStr.split('.')[0] ?? '0', 10);
+                sceneStateRef.current.tbQuantumDay.text = String(dayPart);
+              }
             }
           } finally {
             sceneStateRef.current.isNTComputing = false;
@@ -2648,26 +2709,18 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
             moonMesh.position.copyFrom(targetDirVector);
 
             // ✅ Tidal lock: Moon always faces Earth
-            const earthWorldPos = sceneState.earthPivot.position;
-            moonMesh.lookAt(earthWorldPos);
+            // moonPivot is at Earth's position, so Moon should look at origin of its parent (0,0,0)
+            // Direction from Moon to Earth in local coords = -moonMesh.position (normalized)
+            targetDirVector.copyFrom(moonMesh.position).negateInPlace().normalize();
 
-            // Rotate 180° so maria (near side) faces Earth instead of far side
+            // Build rotation quaternion to face Earth (only yaw, no pitch to avoid tilt)
+            const yaw = Math.atan2(targetDirVector.x, targetDirVector.z);
+
             if (!moonMesh.rotationQuaternion) {
-              moonMesh.rotationQuaternion = Quaternion.FromEulerAngles(
-                moonMesh.rotation.x,
-                moonMesh.rotation.y,
-                moonMesh.rotation.z
-              );
-            } else {
-              Quaternion.FromEulerAnglesToRef(
-                moonMesh.rotation.x,
-                moonMesh.rotation.y,
-                moonMesh.rotation.z,
-                moonMesh.rotationQuaternion
-              );
+              moonMesh.rotationQuaternion = new Quaternion();
             }
-            Quaternion.RotationYawPitchRollToRef(-Math.PI / 2, 0, 0, pivotRotationQuat);
-            moonMesh.rotationQuaternion.multiplyInPlace(pivotRotationQuat);
+            // Add texture offset directly to yaw (+90° to bring maria to front)
+            Quaternion.RotationYawPitchRollToRef(yaw + Math.PI / 2, 0, 0, moonMesh.rotationQuaternion);
           }
         }
         // Do not rotate moonPivot; keep lunar vector inertial

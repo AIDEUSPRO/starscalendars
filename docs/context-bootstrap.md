@@ -107,7 +107,7 @@ Notes:
   - Camera presets Earth↔Moon are implemented with a robust two-phase ArcRotate apply (see section above).
 - Next (current active cycle):
   - Add zodiac (tropical/sidereal) and lunar events (phases/nodes/apsides/eclipses/voc) based strictly on astro-rust outputs (events may be derived classifiers/search).
-  - Add a Moon-view info panel (Babylon GUI) near the Moon and a “ПОДРОБНЕЕ в ТГ‑Канале …” hint inside `#stats` (still one overlay).
+  - Add a Moon-view info panel (Babylon GUI) near the Moon and a “РАСШИФРОВКА ДНЯ в @elioncalendar” hint inside scene top on quantum time.
 
 ## Textures
 - Do not force `noMipmap` or `anisotropicFilteringLevel`. Use Babylon defaults.
@@ -131,7 +131,7 @@ Notes:
 
 ## Stats overlay (#stats)
 - There is exactly one HTML overlay div: `#stats` (FPS). No other overlays are allowed.
-- If additional UI is needed (e.g. “ПОДРОБНЕЕ в ТГ‑Канале …”), it must be rendered **inside** `#stats` (still one overlay element).
+- If additional UI is needed (e.g. “РАСШИФРОВКА ДНЯ в @elioncalendar”), it must be rendered **inside** scene top on quantum time.
 
 ## Agent initialization prompt (paste into new chat)
 ```

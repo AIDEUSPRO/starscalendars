@@ -90,7 +90,7 @@ StarsCalendars is a high-performance spiritual astronomy platform that provides:
 - Two camera modes exist in the scene: `cameraTarget = 'earth' | 'moon'` (see `frontend/src/scene/BabylonScene.tsx`).
 - **Earth preset** (startup + `🌍` button): positions camera above an approximated user location on Earth (timezone→longitude), using a **two-phase ArcRotate apply** (`detachControl → setTarget/setPosition → render → lockedTarget → attachControl → render`) and resets limits.
 - **Moon preset** (`🌙` button): sets camera position to Earth center (`earthPivot.position`) and target to Moon world position (`moonMesh.getAbsolutePosition()`), then locks alpha/beta (rotation) and leaves only zoom (radius limits derived from current radius).
-- **Important**: the scene uses only one HTML overlay element: `#stats`. Any extra hint like “ПОДРОБНЕЕ в ТГ‑Канале …” must be rendered inside `#stats` (still one overlay).
+- **Important**: the scene uses only one HTML overlay element: `#stats` and in prod mast commented code. Any extra hint like “РАСШИФРОВКА ДНЯ в @elioncalendar” must be rendered inside scene top on quantum time.
 
 ### Quantum Time (NT)
 - NT (quantum date) moved from JS to WASM:

@@ -58,7 +58,7 @@
   - [x] Sun fixed at origin; materials frozen; godrays ratio=1.0
   - [x] Camera presets Earth↔Moon: robust two-phase ArcRotate apply + reset/lock limits (Earth preset on startup and 🌍 button; Moon preset on 🌙 button)
   - [ ] LunarInfoPanel near the Moon (Babylon GUI, `linkWithMesh`), shown only in moon camera mode
-  - [ ] `#stats` overlay: add “ПОДРОБНЕЕ в ТГ‑Канале …” inside the same single overlay div (no extra overlays)
+  - [x] add “РАСШИФРОВКА ДНЯ в @elioncalendar” inside scene top on quantum time
   - [ ] Visual tidal lock for Moon using Earth→Moon vector
   - [ ] Performance pass: 60 FPS target, zero GC in loop
 

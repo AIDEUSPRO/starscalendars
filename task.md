@@ -5,7 +5,7 @@ Selected from tasks-list.md
 ## Goal
 1) Полная синхронизация проектной документации (канон, без потери деталей из чата), включая **канон камеры Earth↔Moon** и старт сцены.  
 2) Реализация **знаков зодиака (tropical/sidereal)** и **лунных событий** (phases/nodes/apsides/eclipses/void-of-course) в WASM + инфопанель у Луны на сцене.  
-3) Временно: вместо постинга в TG — UI подсказка “ПОДРОБНЕЕ в ТГ‑Канале …” рядом с FPS **внутри `#stats`** (без дополнительных HTML overlay).
+3) Временно: вместо постинга в TG — UI подсказка “РАСШИФРОВКА ДНЯ в @elioncalendar” в гуи сцены над квантовой датой.
 
 ## Hard rules (канон)
 - Любые новые расчёты **всегда** опираются на вычисления `astro-rust` (локальная копия, read-only). Сначала ищем готовую функцию в `astro-rust/src/*`.
@@ -20,7 +20,7 @@ Selected from tasks-list.md
 - [ ] WASM: zodiac (Sun+Moon) tropical/sidereal
 - [ ] WASM: lunar events (phases/nodes/apsides/eclipses/voc) — off-frame helpers + необходимые текущие значения в STATE
 - [ ] Frontend: LunarInfoPanel (Babylon GUI) у Луны, показывать только при `cameraTarget === 'moon'`
-- [ ] Frontend: “ПОДРОБНЕЕ в ТГ‑Канале …” внутри `#stats` (один overlay)
+- [ ] Frontend: “РАСШИФРОВКА ДНЯ в @elioncalendar” внутри `#stats` (один overlay)
 
 ## Done Criteria
 - Документация синхронизирована и содержит полный “канон камеры” и текущие алгоритмы сцены/WASM без противоречий.

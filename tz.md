@@ -246,7 +246,7 @@ useEffect(() => {
 
 ### GUI
 - FPS: HTML div `#stats` overlay
-- TG hint/link: текст **«ПОДРОБНЕЕ в ТГ‑Канале …»** рендерится **внутри того же `#stats`** (по канону “один overlay”). URL берётся из `import.meta.env.VITE_TELEGRAM_CHANNEL_URL`; если переменная не задана — показываем некликабельный hint.
+- TG hint/link: текст **«РАСШИФРОВКА ДНЯ в @elioncalendar»** рендерится в гуи сцены над квантовым временем. URL берётся из `import.meta.env.VITE_TELEGRAM_CHANNEL_URL`; если переменная не задана — показываем некликабельный hint.
 - Date/NT: Babylon.js AdvancedDynamicTexture
 - Никаких других HTML overlays
 
