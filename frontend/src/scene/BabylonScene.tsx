@@ -1555,7 +1555,7 @@ const BabylonScene: React.FC<BabylonSceneProps> = ({ wasmModule }) => {
       lastNTMinute: 0,
       isNTComputing: false,
       // Camera target mode
-      cameraTarget: 'moon',
+      cameraTarget: 'earth',
       // Moon info panels (3D) + caches
       moonInfoPlaneLeft: left.plane,
       moonInfoPlaneRight: right.plane,
